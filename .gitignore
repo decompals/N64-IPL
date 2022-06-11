@@ -1,0 +1,8 @@
+__pycache__
+
+build
+
+tools/qemu-irix
+*.bin
+*.o
+*.elf
