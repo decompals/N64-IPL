@@ -18,6 +18,7 @@ CROSS := mips-linux-gnu-
 OBJCOPY := $(CROSS)objcopy
 OBJDUMP := $(CROSS)objdump
 LD      := $(CROSS)ld
+STRIP   := $(CROSS)strip
 
 BIN_FILES  := $(foreach f,$(TARGETS),build/$f.bin)
 
@@ -57,6 +58,7 @@ $(eval $(call SET_VARS,$(1)))
 $(1): $(SOURCES)
 	$(CC) $(ASFLAGS) $(OPTFLAGS) $(DEFS) -c $$^ -o $$(@:.bin=.o)
 	@$(OBJDUMP) -drz $$(@:.bin=.o) > $$(@:.bin=.s)
+	@$(STRIP) -N dummy_symbol_ $$(@:.bin=.o)
 	$(LD) -T ipl.ld --defsym start=$(ADDRESS) $$(@:.bin=.o) -o $$(@:.bin=.elf)
 	$(OBJCOPY) -O binary -j.text $$(@:.bin=.elf) $$@
 ifeq ($(COMPARE),1)
