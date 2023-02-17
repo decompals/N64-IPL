@@ -21,11 +21,11 @@
 #define PIF_CMD_UNK4            0x04 /* No known function */
 #define PIF_CMD_TERMINATE_BOOT  0x08 /* Indicate boot process is done, if not sent within 5 seconds from boot the PIF locks the CPU */
 #define PIF_CMD_LOCK_ROM        0x10 /* Unmaps the PIF ROM so it is no longer accessible from the CPU */
-#define PIF_CMD_IPL3_CHECKSUM   0x20 /* Verify the IPL3 checksum */
+#define PIF_CMD_IPL3_CHECKSUM   0x20 /* Send the IPL3 checksum result to the PIF so it can verify it is correct and lock the CPU if not */
 #define PIF_CMD_CLR_RAM         0x40 /* Fill the PIF RAM with 0 */
 
 /* PIF RAM Status (Read) */
-#define PIF_CMD_CHECKSUM_OK     0x80 /* PIF determined IPL3 is OK */
+#define PIF_CMD_CHECKSUM_ACK    0x80 /* PIF received IPL3 checksum result */
 
 /* IPL1 @ 0xBFC00000 (PIF ROM KSEG1) */
 
@@ -122,11 +122,11 @@ END(ipl1)
 ipl2_rom:
 
 LEAF(ipl2)
-    /* wait for PIF_CMD_CHECKSUM_OK to be unset in PIF control/status */
+    /* wait for PIF_CMD_CHECKSUM_ACK  to be unset in PIF control/status */
 loop:
     la      t5, PHYS_TO_K1(PIF_RAM_START)
     lw      t0, PIF_RAM_STATUS(t5)
-    andi    t0, PIF_CMD_CHECKSUM_OK
+    andi    t0, PIF_CMD_CHECKSUM_ACK 
     bnez    t0, loop
 
     /*
@@ -608,7 +608,7 @@ lbl_68c:
 
     sw      a1, PIF_RAM_IPL3_CHECKSUM_LO(t3)
 
-    /* Send IPL3 checksum verify command */
+    /* Send IPL3 checksum to the PIF */
     lw      t0, PIF_RAM_STATUS(t3)
     li      t1, PIF_CMD_IPL3_CHECKSUM
     or      t0, t0, t1
@@ -618,15 +618,16 @@ lbl_6b0:
     bnez    t1, lbl_6b0
     sw      t0, PIF_RAM_STATUS(t3)
 
-    /* Wait until the IPL3 checksum verification is done, loops
-       forever if the checksum is incorrect */
+    /* Wait until the PIF acknowledges that the checksum was received before continuing.
+       If the checksum was wrong the PIF will eventually lock the CPU itself. */
 lbl_6c8:
     addi    t1, zero, 16
 lbl_6cc:
     addi    t1, -1
     bnez    t1, lbl_6cc
+
     lw      t0, PIF_RAM_STATUS(t3)
-    andi    t2, t0, PIF_CMD_CHECKSUM_OK
+    andi    t2, t0, PIF_CMD_CHECKSUM_ACK
     beq     zero, t2, lbl_6c8
 
     /* Clear PIF RAM */
