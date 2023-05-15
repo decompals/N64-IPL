@@ -144,8 +144,10 @@ loop:
     /* osVersion */
     srl     s7, t0, 18
     andi    s7, 1
-#ifdef PIFROM_PAL
+#if defined(PIFROM_PAL)
     ori     s7, 6
+#elif defined(PIFROM_MPAL)
+    ori     s7, 4
 #endif
     /* osRomType */
     srl     s3, t0, 19
@@ -164,8 +166,10 @@ loop:
     srl     s5, t0, 17
     andi    s5, 1
     /* osTvType */
-#ifdef PIFROM_PAL
+#if defined(PIFROM_PAL)
     li      s4, OS_TV_PAL
+#elif defined(PIFROM_MPAL)
+    li      s4, OS_TV_MPAL
 #else
     li      s4, OS_TV_NTSC
 #endif
@@ -655,7 +659,7 @@ ipl2_rom_end:
     /* TODO can we automate the padding to a total size of 0x7C0? IDO pads to the next 0x10 byte
        boundary so it can't be done after compilation with i.e. objcopy */
 
-#ifdef PIFROM_PAL
+#if defined(PIFROM_PAL) || defined(PIFROM_MPAL)
 .repeat 0xA0
 #else
 .repeat 0xA4

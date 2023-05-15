@@ -11,6 +11,7 @@ These disassemblies are primarily for educational, preservation and reference pu
 Run `make` to build all binaries. To test matching, provide a binary file for the version you want to test against in the root directory before running `make`. The binary should be named one of the following:
  - `pifrom.ntsc.bin`
  - `pifrom.pal.bin`
+ - `pifrom.mpal.bin`
  - `ipl3.6106.bin`
  - `ipl3.6102_7101.bin`
  - `ipl3.7102.bin`
