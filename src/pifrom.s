@@ -57,7 +57,7 @@ ipl1_start:
 LEAF(ipl1)
     /* set initial values for C0_SR and C0_CONFIG */
 
-    li      t1, 0x20000000 | 0x10000000 | 0x04000000 /* SR_CU1 | SR_CU0 | SR_FR     why FR? */
+    li      t1, SR_CU0 | SR_CU1 | SR_FR
     MTC0(   t1, C0_SR)
 
     li      t1, CONFIG(0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 2, 1, 1, 0, 0, CONFIG_NONCOHRNT)
@@ -122,7 +122,7 @@ END(ipl1)
 ipl2_rom:
 
 LEAF(ipl2)
-    /* wait for PIF_CMD_CHECKSUM_ACK  to be unset in PIF control/status */
+    /* wait for PIF_CMD_CHECKSUM_ACK to be unset in PIF control/status */
 loop:
     la      t5, PHYS_TO_K1(PIF_RAM_START)
     lw      t0, PIF_RAM_STATUS(t5)
@@ -156,11 +156,13 @@ loop:
     /* Select cart domain based on rom type */
     li      t3, PHYS_TO_K1(PI_DOM1_ADDR2) /* cart rom base */
     beqz    s3, 1f
-    li      t3, PHYS_TO_K1(PI_DOM1_ADDR1) /* DD rom base ? */
+    li      t3, PHYS_TO_K1(PI_DOM1_ADDR1) /* DD rom base */
 1:
 
+    /* Save ROM checksum seed for IPL3 */
     srl     s6, t0, 8
     andi    s6, 0xFF
+    /* IPL3 checksum seed */
     andi    t2, t0, 0xFF
     /* osResetType */
     srl     s5, t0, 17
@@ -185,7 +187,7 @@ si_wait:
 
     sw      t0, PIF_RAM_STATUS(t5)
 
-    /* Set default PI Domain 1 configuration to read the ROM header */
+    /* Set default slow PI Domain 1 configuration to read the ROM header */
     la      t4, PHYS_TO_K1(PI_BASE_REG)
     li      t0, 255
     sw      t0, (PI_BSD_DOM1_LAT_REG - PI_BASE_REG)(t4)
@@ -208,7 +210,8 @@ si_wait:
     srl     t0, t1, 0x14
     sw      t0, (PI_BSD_DOM1_RLS_REG - PI_BASE_REG)(t4)
 
-    addi    t0, zero, 0xFC0
+    addi    t0, zero, 0x1000 - 0x40 /* IPL3 size */
+    /* Advance ROM offset to IPL3 start */
     addi    t3, t3, 0x40
 
     /* Check if RDP DMA method is XBUS */
@@ -223,11 +226,12 @@ pipe_busy:
     lw      t7, (t5)
     andi    t7, t7, DPC_STATUS_PIPE_BUSY
     bnez    t7, pipe_busy
+not_xbus_dma:
+
+    or      a2, zero, t0
 
     /* Copy IPL3 to RSP DMEM */
-not_xbus_dma:
     la      t5, PHYS_TO_K1(SP_DMEM_START)
-    or      a2, zero, t0
     addi    t5, t5, 0x40
 ipl3_copyloop:
     lw      t1, (t3)
@@ -275,6 +279,13 @@ LEAF(subroutine_1210)
     jr      ra
 END(subroutine_1210)
 
+/**
+ *  Compute checksum over IPL3
+ *
+ *  a0 = seed * 0x6C078965 + 1
+ *  a1 = pointer to IPL3
+ *  a2 = IPL3 size
+ */
 LEAF(CalcChecksum)
     addiu   sp, sp, -0xE0
     sw      ra, 0x3C(sp)
@@ -293,10 +304,10 @@ LEAF(CalcChecksum)
     xor     s0, t6, a0
 
 lbl_294:
-    sw      s0, 4(v0)
-    sw      s0, 8(v0)
+    sw      s0, 0x4(v0)
+    sw      s0, 0x8(v0)
     sw      s0, 0xC(v0)
-    sw      s0, (v0)
+    sw      s0, 0x0(v0)
     addiu   v0, v0, 16
     bne     v0, v1, lbl_294
 
@@ -554,7 +565,7 @@ lbl_5cc:
     move    a0, v0
     addiu   sp, sp, 0xE0
     xor     a1, t4, t6
-    bal     subroutine_1640
+    bal     VerifyAndRunIPL3
 END(CalcChecksum)
 
 /**
@@ -575,7 +586,7 @@ LEAF(mult_64bit)
     jr      ra
 END(mult_64bit)
 
-LEAF(subroutine_1640)
+LEAF(VerifyAndRunIPL3)
     /* Write calculated IPL3 checksum into PIF RAM */
 
     /* TODO figure out how to write this properly. la is very close but the generated addiu
@@ -587,60 +598,63 @@ LEAF(subroutine_1640)
     andi    a0, a0, 0xFFFF
     lui     t3, PHYS_TO_K1(PIF_RAM_START) >> 16
     lw      t0, (PHYS_TO_K1(PIF_RAM_START + PIF_RAM_IPL3_CHECKSUM_HI) & 0xFFFF)(t3)
+
     li      t2, 0xFFFF0000
     and     t0, t0, t2
     or      a0, a0, t0
     addiu   t3, t3, PHYS_TO_K1(PIF_RAM_START) & 0xFFFF
 
-lbl_660:
+si_wait2:
     lw      t1, PHYS_TO_K1(SI_STATUS_REG)
     andi    t1, SI_STATUS_RD_BUSY
-    bnez    t1, lbl_660
+    bnez    t1, si_wait2
 
     sw      a0, PIF_RAM_IPL3_CHECKSUM_HI(t3)
 
+    /* Give SI time to raise SI_STATUS_RD_BUSY ? */
     NOP
     NOP
     NOP
     NOP
     NOP
 
-lbl_68c:
+si_wait3:
     lw      t1, PHYS_TO_K1(SI_STATUS_REG)
     andi    t1, SI_STATUS_RD_BUSY
-    bnez    t1, lbl_68c
+    bnez    t1, si_wait3
 
     sw      a1, PIF_RAM_IPL3_CHECKSUM_LO(t3)
 
-    /* Send IPL3 checksum to the PIF */
+    /* Tell PIF to verify the IPL3 checksum */
     lw      t0, PIF_RAM_STATUS(t3)
     li      t1, PIF_CMD_IPL3_CHECKSUM
     or      t0, t0, t1
-lbl_6b0:
+si_wait4:
     lw      t1, PHYS_TO_K1(SI_STATUS_REG)
     andi    t1, SI_STATUS_RD_BUSY
-    bnez    t1, lbl_6b0
+    bnez    t1, si_wait4
+
     sw      t0, PIF_RAM_STATUS(t3)
 
     /* Wait until the PIF acknowledges that the checksum was received before continuing.
        If the checksum was wrong the PIF will eventually lock the CPU itself. */
-lbl_6c8:
+wait_ack:
     addi    t1, zero, 16
-lbl_6cc:
+1:
     addi    t1, -1
-    bnez    t1, lbl_6cc
+    bnez    t1, 1b
 
     lw      t0, PIF_RAM_STATUS(t3)
     andi    t2, t0, PIF_CMD_CHECKSUM_ACK
-    beq     zero, t2, lbl_6c8
+    beq     zero, t2, wait_ack
 
     /* Clear PIF RAM */
     li      t2, PIF_CMD_CLR_RAM
     or      t0, t0, t2
-lbl_6f0:
+si_wait5:
     lw      t1, PHYS_TO_K1(SI_STATUS_REG)
     andi    t1, SI_STATUS_RD_BUSY
-    bnez    t1, lbl_6f0
+    bnez    t1, si_wait5
 
     sw      t0, PIF_RAM_STATUS(t3)
 
@@ -649,7 +663,7 @@ lbl_6f0:
     addi    t3, t3, 0x40
     jr      t3
     NOP
-END(subroutine_1640)
+END(VerifyAndRunIPL3)
 
 ipl2_rom_end:
 

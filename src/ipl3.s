@@ -25,13 +25,36 @@
     (((RowImpRestore) & 0x1F) <<  8) | \
     (((RowExpRestore) & 0x1F) <<  0))
 
+#define DEVICE_TYPE(Bank, Row, Col, Bonus, EnhancedSpeed, Version, Type) \
+   ((((Col)           & 0xF) << 28) | \
+    (((Bonus)         &   1) << 26) | \
+    (((EnhancedSpeed) &   1) << 24) | \
+    (((Bank)          & 0xF) << 20) | \
+    (((Row)           & 0xF) << 16) | \
+    (((Version)       & 0xF) <<  4) | \
+    (((Type)          & 0xF) <<  0))
+
+#define RDRAM_DEVICE_TYPE_ES    (1 << 24)   /* Enhanced speed */
+
+#define RDRAM_MANUFACTURER_NEC  0x500
+
 #define RI_REFRESH(Banks, Optimize, Enable, Bank, DirtyDelay, CleanDelay) \
    ((((Banks)      & 0x1FFF) << 19) | \
-    (((Optimize)   & 1     ) << 18) | \
-    (((Enable)     & 1     ) << 17) | \
-    (((Bank)       & 1     ) << 16) | \
-    (((DirtyDelay) & 0xFF  ) <<  8) | \
-    (((CleanDelay) & 0xFF  ) <<  0))
+    (((Optimize)   &      1) << 18) | \
+    (((Enable)     &      1) << 17) | \
+    (((Bank)       &      1) << 16) | \
+    (((DirtyDelay) &   0xFF) <<  8) | \
+    (((CleanDelay) &   0xFF) <<  0))
+
+#define RI_CONFIG_CC_AUTO 0x40
+
+#define RDRAM_MODE_AUTO_SKIP        0x80000000 /*AS=1*/
+#define RDRAM_MODE_CC_MULT          0x40000000 /*X2=1*/
+#define RDRAM_MODE_CC_ENABLE        0x04000000 /*CE=1*/
+#define RDRAM_MODE_DEVICE_ENABLE    0x02000000 /*DE=1*/
+
+#define CC_AUTO   1
+#define CC_MANUAL 2
 
 /* IPL3 @ 0xA4000040 (DMEM + 0x40 KSEG1) */
 
@@ -88,14 +111,16 @@ LEAF(ipl3)
     sw      s6, 0xC(sp)
     sw      s7, 0x10(sp)
     la      t0, PHYS_TO_K1(RI_BASE_REG)
+
     /* writes to RDRAM registers through the global config will be broadcast to all units */
     li      t2, PHYS_TO_K1(RDRAM_BASE_REG | RDRAM_GLOBAL_CONFIG)
     /* write only to the currently selected unit */
     li      t3, PHYS_TO_K1(RDRAM_BASE_REG)
+
     la      t4, PHYS_TO_K1(MI_BASE_REG)
 
     /* set current control to automatic */
-    ori     t1, zero, 0x40
+    ori     t1, zero, RI_CONFIG_CC_AUTO
     sw      t1, (RI_CONFIG_REG - RI_BASE_REG)(t0)
 
 #if defined(IPL3_X103) || defined (IPL3_X106)
@@ -151,203 +176,267 @@ wait_rdram:
     /* Set all Refresh Row to 0 */
     sw      zero, (RDRAM_REF_ROW_REG - RDRAM_BASE_REG)(t2)
 
-    li      t1, K0BASE
+    /* Move all RDRAMs to physical address 0x2000000 */
+    li      t1, 0x2000000 << 6
     sw      t1, (RDRAM_DEVICE_ID_REG - RDRAM_BASE_REG)(t2)
 
-    move    t5, zero
-    move    t6, zero
-    li      t7, PHYS_TO_K1(RDRAM_BASE_REG)
-    move    t8, zero
-    li      t9, PHYS_TO_K1(RDRAM_BASE_REG)
-    li      s6, K1BASE
-    move    s7, zero
-    li      a2, PHYS_TO_K1(RDRAM_BASE_REG)
-    li      a3, K1BASE
-    move    s2, zero
-    li      s4, K1BASE  /* Where in memory to do CC value testing */
+#define NumBanks            t5
+#define InitialDeviceID     t6
+#define InitialRegBase      t7
+#define FinalDeviceID_1M    t8
+#define FinalRegBase_1M     t9
+#define TestAddr_1M         s6
+#define FinalDeviceID_2M    s7
+#define FinalRegBase_2M     a2
+#define TestAddr_2M         a3
+#define BankBitmask_2M      s2
+#define CCTestAddr          s4
+
+    move    NumBanks, zero
+    move    InitialDeviceID, zero
+    li      InitialRegBase, PHYS_TO_K1(RDRAM_BASE_REG)
+    move    FinalDeviceID_1M, zero
+    li      FinalRegBase_1M, PHYS_TO_K1(RDRAM_BASE_REG)
+    li      TestAddr_1M, K1BASE
+    move    FinalDeviceID_2M, zero
+    li      FinalRegBase_2M, PHYS_TO_K1(RDRAM_BASE_REG)
+    li      TestAddr_2M, K1BASE
+    move    BankBitmask_2M, zero
+    li      CCTestAddr, K1BASE  /* Where in memory to do CC value testing */
+
     addiu   sp, sp, -0x48
     move    s8, sp
+
     /* check RCP silicon version */
     lw      s0, PHYS_TO_K1(MI_VERSION_REG)
     la      s1, 0x1010101 /* RSP:01 RDP:01 RAC:01 IO:01 */
     bne     s0, s1, rcp2
      nop
     /* RCP 1.0 */
-    li      s0, 512     /* RCP 1.0 RDRAM regs spacing */
-    ori     s1, t3, 0x4000
+    li      s0, 1 << 9     /* RCP 1.0 RDRAM regs spacing */
+    ori     s1, t3, (0x2000000 >> 20) << 9
     b       loop1
      nop
 rcp2:
     /* RCP 2.0 */
-    li      s0, 1024    /* RCP 2.0 RDRAM regs spacing */
-    ori     s1, t3, 0x8000
+    li      s0, 1 << 10    /* RCP 2.0 RDRAM regs spacing */
+    ori     s1, t3, (0x2000000 >> 20) << 10
+
+    /* detect present RDRAM banks and compute the Current Control (CC) value for them */
 loop1:
-    /* detect present RDRAM banks */
-    /* set address */
-    sw      t6, (RDRAM_DEVICE_ID_REG - RDRAM_BASE_REG)(s1)
-    /* try to find an appropriate Current Control value for this bank */
-    addiu   s5, t7, RDRAM_MODE_REG - RDRAM_BASE_REG
+    /* set the first responder to the first available device ID */
+    sw      InitialDeviceID, (RDRAM_DEVICE_ID_REG - RDRAM_BASE_REG)(s1)
+
+    /* try to find an appropriate CC value for this bank */
+    addiu   s5, InitialRegBase, RDRAM_MODE_REG - RDRAM_BASE_REG
     jal     InitCCValue
      nop
     /* failed, assume no bank */
-    beqz    v0, done_loop1
+    beqz    v0, loop1_break
      nop
-    /* determine bank size and good RAS interval values for manufacturer */
+    /* save computed CC value for later */
     sw      v0, (sp)
+
+    /* determine bank size by reading the RDRAM device type register */
     li      t1, MI_SET_RDRAM
     sw      t1, (MI_INIT_MODE_REG - MI_BASE_REG)(t4)
-    lw      t3, (RDRAM_DEVICE_TYPE_REG - RDRAM_BASE_REG)(t7)
-    li      t0, 0xF0FF0000
+    lw      t3, (RDRAM_DEVICE_TYPE_REG - RDRAM_BASE_REG)(InitialRegBase)
+    li      t0, 0xF0FF0000  /* Extracts 3x 4-bit values: Number of column/row/bank address bits */
     and     t3, t3, t0
-    sw      t3, 4(sp)
+    sw      t3, 4(sp) /* save device type for later */
     addi    sp, sp, 8
     li      t1, MI_CLR_RDRAM
     sw      t1, (MI_INIT_MODE_REG - MI_BASE_REG)(t4)
-    li      t0, 0xB0190000
+    li      t0, DEVICE_TYPE(1, 9, 11, 0, 0, 0, 0)   /* BNK=1 , ROW=9 , COL=11 => (1 << 1) * (1 << 9) * (1 << 11) = 2MB */
     bne     t3, t0, SM
      nop
-    li      t0, 0x8000000
-    add     t8, t8, t0
-    add     t9, t9, s0
-    add     t9, t9, s0
-    li      t0, 0x200000    /* 2MB */
-    add     s6, s6, t0
-    add     s4, s4, t0
-    sll     s2, s2, 1
-    addi    s2, s2, 1
+
+    /* 2MB module */
+    li      t0, 0x200000 << 6
+    add     FinalDeviceID_1M, FinalDeviceID_1M, t0
+
+    /* Increment 1MB reg base by 2x reg spacing */
+    add     FinalRegBase_1M, FinalRegBase_1M, s0
+    add     FinalRegBase_1M, FinalRegBase_1M, s0
+
+    /* Increment test addresses */
+    li      t0, 0x200000                /* 2MB */
+    add     TestAddr_1M, TestAddr_1M, t0
+    add     CCTestAddr, CCTestAddr, t0
+
+    /* Only 2MB modules are flagged? */
+    sll     BankBitmask_2M, BankBitmask_2M, 1
+    addi    BankBitmask_2M, BankBitmask_2M, 1
     b       LM
      nop
-SM: /* 1MB module */
-    li      t0, 0x100000    /* 1MB */
-    add     s4, s4, t0
-LM: /* 2MB module */
-    li      t0, 8192
-    sw      t0, (t4)
-    lw      t1, (RDRAM_DEVICE_MANUF_REG - RDRAM_BASE_REG)(t7)
-    lw      k0, (RDRAM_CONFIG_REG - RDRAM_BASE_REG)(t7)
-    li      t0, 4096
-    sw      t0, (t4)
+SM:
+    /* 1MB module */
+    /* Increment test address */
+    li      t0, 0x100000                /* 1MB */
+    add     CCTestAddr, CCTestAddr, t0
+
+LM:
+    /* Determine the device manufacturer and set appropriate RAS Interval */
+    li      t0, MI_SET_RDRAM
+    sw      t0, (MI_INIT_MODE_REG - MI_BASE_REG)(t4)
+    lw      t1, (RDRAM_DEVICE_MANUF_REG - RDRAM_BASE_REG)(InitialRegBase)
+    lw      k0, (RDRAM_DEVICE_TYPE_REG - RDRAM_BASE_REG)(InitialRegBase)
+    li      t0, MI_CLR_RDRAM
+    sw      t0, (MI_INIT_MODE_REG - MI_BASE_REG)(t4)
+
     andi    t1, t1, 0xFFFF
-    li      t0, 0x500
+    li      t0, RDRAM_MANUFACTURER_NEC  /* NEC Manufacturer ID */
     bne     t1, t0, toshiba
      nop
-    li      k1, 0x1000000
+    li      k1, RDRAM_DEVICE_TYPE_ES
     and     k0, k0, k1
     bnez    k0, toshiba
      nop
+/*other:*/
     li      t0, RASINTERVAL(16, 28, 10, 4)
-    sw      t0, (RDRAM_RAS_INTERVAL_REG - RDRAM_BASE_REG)(t7)
+    sw      t0, (RDRAM_RAS_INTERVAL_REG - RDRAM_BASE_REG)(InitialRegBase)
     b       done_manufacture
 toshiba:
      li     t0, RASINTERVAL(8, 12, 18, 4)
-    sw      t0, (RDRAM_RAS_INTERVAL_REG - RDRAM_BASE_REG)(t7)
+    sw      t0, (RDRAM_RAS_INTERVAL_REG - RDRAM_BASE_REG)(InitialRegBase)
+
 done_manufacture:
-    li      t0, 0x8000000
-    add     t6, t6, t0
-    add     t7, t7, s0
-    add     t7, t7, s0
-    addiu   t5, t5, 1
-    sltiu   t0, t5, 8
+    /* Increment device id by 2MB (regardless of whether it was a 2MB or 1MB module? bug? since CCTestAddr goes out of sync) */
+    li      t0, 0x200000 << 6
+    add     InitialDeviceID, InitialDeviceID, t0
+    /* Increment RDRAM reg base by 2x reg spacing (also regardless of 2MB or 1MB? also bug?) */
+    add     InitialRegBase, InitialRegBase, s0
+    add     InitialRegBase, InitialRegBase, s0
+
+    addiu   NumBanks, NumBanks, 1
+    /* Only try up to 8 banks */
+    sltiu   t0, NumBanks, 8
     bnez    t0, loop1
      nop
-done_loop1:
-    /* broadcast global mode value and move all banks to K0BASE */
-    li      t0, 0x80000000/* AS=1 (AutoSkip) */ | 0x40000000/* X2=1 (CCMult) */ | 0x04000000/* CE=1 (CCEnable) */
+loop1_break:
+
+    /* move all banks to their final address space, sorting 2MB banks before 1MB banks */
+
+    /* broadcast global mode value and move all banks to address 0x2000000 */
+    li      t0, RDRAM_MODE_AUTO_SKIP | RDRAM_MODE_CC_MULT | RDRAM_MODE_CC_ENABLE
     sw      t0, (RDRAM_MODE_REG - RDRAM_BASE_REG)(t2)
-    li      t0, K0BASE
+    li      t0, 0x2000000 << 6
     sw      t0, (RDRAM_DEVICE_ID_REG - RDRAM_BASE_REG)(t2)
+
     move    sp, s8
     move    v1, zero
 loop2:
-    lw      t1, 4(sp)
-    li      t0, 0xB0090000
+    lw      t1, 4(sp)   /* reload saved device type */
+    li      t0, DEVICE_TYPE(0, 9, 11, 0, 0, 0, 0)   /* BNK=1 , ROW=9 , COL=11 => (1 << 0) * (1 << 9) * (1 << 11) = 1MB */
     bne     t1, t0, HM
      nop
+
     /* 1MB Module */
-    sw      t8, 4(s1)
-    addiu   s5, t9, 12
-    lw      a0, (sp)
-    addi    sp, sp, 8
-    li      a1, 1
+    /* Set Device ID for first responder */
+    sw      FinalDeviceID_1M, (RDRAM_DEVICE_ID_REG - RDRAM_BASE_REG)(s1)
+
     /* Write optimal CC value (auto) */
+    addiu   s5, FinalRegBase_1M, (RDRAM_MODE_REG - RDRAM_BASE_REG)
+    lw      a0, (sp) /* Reload CC value computed prior */
+    addi    sp, sp, 8
+    li      a1, CC_AUTO
     jal     WriteCC
      nop
-    /* 4 reads */
-    lw      t0, (s6)
-    li      t0, 0x80000
-    add     t0, t0, s6
+
+    /* 4 reads @ (TestAddr_1M) x2 & (TestAddr_1M + 0x80000) x2 */
+    lw      t0, (TestAddr_1M)
+    li      t0, 0x100000 / 2
+    add     t0, t0, TestAddr_1M
     lw      t1, (t0)
-    lw      t0, (s6)
-    li      t0, 0x80000
-    add     t0, t0, s6
+    lw      t0, (TestAddr_1M)
+    li      t0, 0x100000 / 2
+    add     t0, t0, TestAddr_1M
     lw      t1, (t0)
-    li      t0, 0x4000000
-    add     t6, t6, t0
-    add     t9, t9, s0
+
+    /* @bug This should increment FinalDeviceID_1M, all 1MB RDRAMs are mapped to the same location */
+    li      t0, 0x100000 << 6
+    add     InitialDeviceID, InitialDeviceID, t0
+    /* Increment RDRAM register base by 1x reg spacing */
+    add     FinalRegBase_1M, FinalRegBase_1M, s0
+
+    /* Increment test address */
     li      t0, 0x100000    /* 1MB */
-    add     s6, s6, t0
-    b       done_loop2
+    add     TestAddr_1M, TestAddr_1M, t0
+
+    b       loop2_next
 HM:
     /* 2MB Module */
-     sw     s7, 4(s1)
-    addiu   s5, a2, 12
-    lw      a0, (sp)
-    addi    sp, sp, 8
-    li      a1, 1
+    /* Set Device ID for first responder */
+     sw     FinalDeviceID_2M, (RDRAM_DEVICE_ID_REG - RDRAM_BASE_REG)(s1)
+
     /* Write optimal CC value (auto) */
+    addiu   s5, FinalRegBase_2M, (RDRAM_MODE_REG - RDRAM_BASE_REG)
+    lw      a0, (sp) /* Reload CC value computed prior */
+    addi    sp, sp, 8
+    li      a1, CC_AUTO
     jal     WriteCC
      nop
+
     /* 8 reads */
-    lw      t0, (a3)
-    li      t0, 0x80000
-    add     t0, t0, a3
+    lw      t0, (TestAddr_2M)
+    li      t0, 0x80000*1
+    add     t0, t0, TestAddr_2M
     lw      t1, (t0)
-    li      t0, 0x100000
-    add     t0, t0, a3
+    li      t0, 0x80000*2
+    add     t0, t0, TestAddr_2M
     lw      t1, (t0)
-    li      t0, 0x180000
-    add     t0, t0, a3
+    li      t0, 0x80000*3
+    add     t0, t0, TestAddr_2M
     lw      t1, (t0)
-    lw      t0, (a3)
-    li      t0, 0x80000
-    add     t0, t0, a3
+
+    lw      t0, (TestAddr_2M)
+    li      t0, 0x80000*1
+    add     t0, t0, TestAddr_2M
     lw      t1, (t0)
-    li      t0, 0x100000
-    add     t0, t0, a3
+    li      t0, 0x80000*2
+    add     t0, t0, TestAddr_2M
     lw      t1, (t0)
-    li      t0, 0x180000
-    add     t0, t0, a3
+    li      t0, 0x80000*3
+    add     t0, t0, TestAddr_2M
     lw      t1, (t0)
-    li      t0, 0x8000000
-    add     s7, s7, t0
-    add     a2, a2, s0
-    add     a2, a2, s0
+
+    /* Increment Device ID by 2MB */
+    li      t0, 0x200000 << 6
+    add     FinalDeviceID_2M, FinalDeviceID_2M, t0
+
+    /* Increment RDRAM reg base by 2x reg spacing */
+    add     FinalRegBase_2M, FinalRegBase_2M, s0
+    add     FinalRegBase_2M, FinalRegBase_2M, s0
+
+    /* Increment test address */
     li      t0, 0x200000    /* 2MB */
-    add     a3, a3, t0
-done_loop2:
+    add     TestAddr_2M, TestAddr_2M, t0
+loop2_next:
+    /* Loop until all detected banks are configured */
     addiu   v1, v1, 1
-    slt     t0, v1, t5
+    slt     t0, v1, NumBanks
     bnez    t0, loop2
      nop
 
     /* Set RI_REFRESH */
     li      t2, PHYS_TO_K1(RI_BASE_REG)
-    sll     s2, s2, 19  /* detected banks */
+    sll     BankBitmask_2M, BankBitmask_2M, 19
     li      t1, RI_REFRESH(0, 1, 1, 0, 54, 52)
-    or      t1, t1, s2
+    or      t1, t1, BankBitmask_2M                  /* detected 2MB banks */
     sw      t1, (RI_REFRESH_REG - RI_BASE_REG)(t2)
     lw      t1, (RI_REFRESH_REG - RI_BASE_REG)(t2)  /* dummy read? */
+
     /* Save computed memory size */
 #ifdef IPL3_X105
     li      t0, PHYS_TO_K1(0x000003F0)
     li      t1, 0xFFFFFFF
-    and     s6, s6, t1
-    sw      s6, (t0)
+    and     TestAddr_1M, TestAddr_1M, t1
+    sw      TestAddr_1M, (t0)
 #else
     li      t0, PHYS_TO_K1(0x00000300)
     li      t1, 0xFFFFFFF
-    and     s6, s6, t1
-    sw      s6, 0x18(t0) /* osMemSize */
+    and     TestAddr_1M, TestAddr_1M, t1
+    sw      TestAddr_1M, 0x18(t0) /* osMemSize */
 #endif
 
     move    sp, s8
@@ -497,9 +586,9 @@ pifipl3e:
     and     t2, t2, t3
 #ifdef IPL3_6101
     /* In the 6101 IPL3, these are physical addresses while in every other version they are KSEG1 addresses */
-    la      t0, (SP_DMEM_START + 0x4B4)
+    la      t0, block17s-0xA0000000
     addiu   t1, t1, -1
-    la      t3, (SP_DMEM_START + 0x778)
+    la      t3, pifipl3e-0xA0000000
 #else
     la      t0, block17s
     addiu   t1, t1, -1
@@ -530,6 +619,7 @@ send2:
     bltu    t0, t3, send2
 
 #ifdef IPL3_X105
+    /* start the RSP */
     li      t2, SP_CLR_HALT | SP_CLR_BROKE | SP_CLR_INTR | SP_CLR_SSTEP | SP_CLR_INTR_BREAK
     sw      t2, PHYS_TO_K1(SP_STATUS_REG)
     la      t4, PHYS_TO_K0(0x00000004)
@@ -616,6 +706,7 @@ waitdma:
     bnez    t3, waitdma
 
 #ifdef IPL3_X105
+    /* return the semaphore, notifies the RSP that PI DMA has completed */
     sw      zero, PHYS_TO_K1(SP_SEMAPHORE_REG)
 #endif
 
@@ -723,11 +814,14 @@ checksum_loop:
 checksum_fail:
     bal     checksum_fail
 checksum_OK:
+    /* Try to read PC, if the read worked the RSP is not running */
     lw      t1, PHYS_TO_K1(SP_PC_REG)
     lw      s0, 0x14(sp)
     lw      ra, 0x1C(sp)
     addiu   sp, sp, 0x20
+    /* if the RSP PC is 0, skip */
     beqz    t1, 1f
+    /* halt the RSP by forcing it into sstep mode? */
     li      t2, SP_SET_SSTEP | SP_CLR_HALT
     sw      t2, PHYS_TO_K1(SP_STATUS_REG)
     sw      zero, PHYS_TO_K1(SP_PC_REG)
@@ -849,12 +943,54 @@ END(ipl3)
 #ifdef IPL3_X105
 .set noreorder
 
-.word 0x40083800, 0x400B0800, 0xC80C2000, 0x8C040040, 0x00000000, 0x00000000, 0x40800000, 0x38030180
-.word 0x40830800, 0x40801000, 0x3C050020, 0x04A0001B, 0x40033800, 0x1460FFFD, 0x20A5FFFF, 0x8C060000
-.word 0x40800000, 0x38030400, 0x40830800, 0x38030FFF, 0x40831000, 0x40033000, 0x1460FFFE, 0x38030FF0
-.word 0x4A0D6B51, 0xC86E2000, 0x2063FFF0, 0x0461FFFD, 0x4A0E6B54, 0x3803B120, 0x40830000, 0x3C03B12F
-.word 0x3863B1F0, 0x40830800, 0x3C03FE81, 0x38637000, 0x40831800, 0x38030240, 0x40835800, 0x0000000D
-.word 0x00000000, 0x00000000
+/* This is RSP code */
+                 /* start:                                      */
+.word 0x40083800 /*     mfc0        $8, SP_SEMAPHORE            */ /* acquire the semaphore */
+.word 0x400B0800 /*     mfc0        $11, SP_DRAM_ADDR           */
+.word 0xC80C2000 /*     lqv         $v12[0], ($zero)            */
+.word 0x8C040040 /*     lw          $4, 0x40($zero)             */
+.word 0x00000000 /*     nop                                     */
+.word 0x00000000 /*     nop                                     */
+.word 0x40800000 /*     mtc0        $zero, SP_MEM_ADDR          */ /* DMA 8 bytes to DMEM offset 0 */
+.word 0x38030180 /*     xori        $3, $zero, 0x180            */
+.word 0x40830800 /*     mtc0        $3, SP_DRAM_ADDR            */
+.word 0x40801000 /*     mtc0        $zero, SP_RD_LEN            */
+.word 0x3C050020 /*     li          $5, 0x200000                */ /* wait until PI DMA is done, skip to the end if it times out */
+                 /* acquire_semaphore:                          */
+.word 0x04A0001B /*     bltz        $5, end                     */
+.word 0x40033800 /*      mfc0       $3, SP_SEMAPHORE            */
+.word 0x1460FFFD /*     bnez        $3, acquire_semaphore       */
+.word 0x20A5FFFF /*      addi       $5, $5, -1                  */
+.word 0x8C060000 /*     lw          $6, ($zero)                 */ /* prepare $6 */
+.word 0x40800000 /*     mtc0        $zero, SP_MEM_ADDR          */ /* DMA 0x1000 bytes of DRAM at 0x400 to DMEM at 0 */
+.word 0x38030400 /*     xori        $3, $zero, 0x400            */
+.word 0x40830800 /*     mtc0        $3, SP_DRAM_ADDR            */
+.word 0x38030FFF /*     xori        $3, $zero, 0xFFF            */
+.word 0x40831000 /*     mtc0        $3, SP_RD_LEN               */
+                 /* dma_wait:                                   */ /* wait for DMA */
+.word 0x40033000 /*     mfc0        $3, SP_DMA_BUSY             */
+.word 0x1460FFFE /*     bnez        $3, dma_wait                */
+.word 0x38030FF0 /*      xori       $3, $zero, 0xFF0            */
+.word 0x4A0D6B51 /*     vsub        $v13, $v13, $v13            */ /* clear $v13 */
+                 /* sum:                                        */ /* sum the contents of DMEM via vaddc, from top to bottom */
+.word 0xC86E2000 /*     lqv         $v14[0], ($3)               */
+.word 0x2063FFF0 /*     addi        $3, $3, -0x10               */
+.word 0x0461FFFD /*     bgez        $3, sum                     */
+.word 0x4A0E6B54 /*      vaddc      $v13, $v13, $v14            */
+.word 0x3803B120 /*     xori        $3, $zero, 0xB120           */
+.word 0x40830000 /*     mtc0        $3, SP_MEM_ADDR             */ /* 0xB120 -> 0x1120 (13 bits) */
+.word 0x3C03B12F /*     lui         $3, 0xB12F                  */
+.word 0x3863B1F0 /*     xori        $3, $3, 0xB1F0              */
+.word 0x40830800 /*     mtc0        $3, SP_DRAM_ADDR            */ /* 0xB12FB1F0 -> 0x2FB1F0 (24 bits) */
+.word 0x3C03FE81 /*     lui         $3, 0xFE81                  */
+.word 0x38637000 /*     xori        $3, $3, 0x7000              */
+.word 0x40831800 /*     mtc0        $3, SP_WR_LEN               */ /* 0xFE817000 -> Skip=0xFE8 Count=23 Length=0 (8 bytes) */
+.word 0x38030240 /*     xori        $3, $zero, 0x240            */ /* DPC_CLR_CLOCK_CTR | DPC_CLR_TMEM_CTR */
+.word 0x40835800 /*     mtc0        $3, DPC_STATUS              */
+                 /* end:                                        */
+.word 0x0000000D /*     break       0                           */ /* halt */
+.word 0x00000000 /*     nop                                     */
+.word 0x00000000 /*     nop                                     */
 
 .set reorder
 #endif
@@ -862,7 +998,9 @@ END(ipl3)
 #endif /* IPL3_X106 */
 
 /**
- *  Find and set RDRAM Current Control value
+ *  Find and set RDRAM Current Control (CC) value
+ *
+ *  Return (v0) : Calibrated CC value
  */
 LEAF(InitCCValue)
     addiu   sp, sp, -0xA0
@@ -873,10 +1011,10 @@ pifipl3e:
 #endif
     move    s1, zero
     move    s0, zero
-    sw      v0, 0(sp)
-    sw      v1, 4(sp)
-    sw      a0, 8(sp)
-    sw      a1, 0xC(sp)
+    sw      v0, 0x00(sp)
+    sw      v1, 0x04(sp)
+    sw      a0, 0x08(sp)
+    sw      a1, 0x0C(sp)
     sw      a2, 0x10(sp)
     sw      a3, 0x14(sp)
     sw      t0, 0x18(sp)
@@ -897,23 +1035,27 @@ pifipl3e:
     sw      s7, 0x5C(sp)
     sw      s8, 0x60(sp)
     sw      ra, 0x64(sp)
+
+    /* Compute the CC value four times, sum for average */
 CCloop1:
     jal     FindCC
-
+    addu    s1, s1, v0  /* s1 += cc */
     addiu   s0, s0, 1
-    addu    s1, s1, v0
     slti    t1, s0, 4
-    bnez    t1, CCloop1
-    srl     a0, s1, 2
-    li      a1, 1
+    bnez    t1, CCloop1 /* while (s0 < 4) */
+
+    /* Write the average CC value */
+    srl     a0, s1, 2   /* a0 = s1 / 4 */
+    li      a1, CC_AUTO
     jal     WriteCC
 
+    /* Return the average CC value in v0 */
     srl     v0, s1, 2
 
     lw      s1, 0x44(sp)
-    lw      v1, 4(sp)
-    lw      a0, 8(sp)
-    lw      a1, 0xC(sp)
+    lw      v1, 0x04(sp)
+    lw      a0, 0x08(sp)
+    lw      a1, 0x0C(sp)
     lw      a2, 0x10(sp)
     lw      a3, 0x14(sp)
     lw      t0, 0x18(sp)
@@ -941,7 +1083,7 @@ END(InitCCValue)
 
 /**
  * Tests various CC values until it finds the best value passing TestCCValue.
- * Once found, converts the "Manual" CC value to an "Automatic" CC value and returns it.
+ * Once found, converts the "Manual" CC value to an "Automatic" CC value and returns it in v0.
  */
 LEAF(FindCC)
     addiu   sp, sp, -0x20
@@ -950,9 +1092,11 @@ LEAF(FindCC)
     move    t3, zero
     move    t4, zero
 prepass_loop:
+    /* Stop searching if nominal CC value >= 64 */
     slti    k0, t4, 64
     beqz    k0, done_findcc
 
+    /* Test this RDRAM module with the current CC value */
     move    a0, t4
     jal     TestCCValue
 
@@ -960,27 +1104,23 @@ prepass_loop:
 
     /* CC test successful */
     subu    k0, v0, t1
-    multu   k0, t4
-    mflo    k0
-    addu    t3, t3, k0
-    move    t1, v0
+    mul     k0, k0, t4
+    addu    t3, t3, k0      /* t3 += (v0 - t1) * t4  */
+    move    t1, v0          /* t1 = v0 */
 next_pass:
     addiu   t4, t4, 1
     slti    k0, t1, 80
-    bnez    k0, prepass_loop
+    bnez    k0, prepass_loop    /* while (t1 < 80) */
 
-    sll     a0, t3, 2
-    subu    a0, a0, t3
-    sll     a0, a0, 2
-    subu    a0, a0, t3
-    sll     a0, a0, 1
-    addiu   a0, a0, -880
+    mul     a0, t3, 22
+    addiu   a0, a0, -(22 * 40)
+    /* a0 = (t3 - 40) * 22 */
     jal     ConvertManualToAuto
 
     b       return_findcc
 
 done_findcc:
-    move    v0, zero
+    move    v0, zero    /* Failed to find a working CC value, return 0 */
 return_findcc:
     lw      ra, 0x1C(sp)
     addiu   sp, sp, 0x20
@@ -997,37 +1137,41 @@ END(FindCC)
 LEAF(TestCCValue)
     addiu   sp, sp, -0x28
     sw      ra, 0x1C(sp)
+
     move    v0, zero
     /* Write in the CC value (manual) */
-    li      a1, 2
+    li      a1, CC_MANUAL
     jal     WriteCC
 
     move    s8, zero
 jloop:
+    /* write -1 */
     li      k0, -1
-    /* write */
     sw      k0, 0(s4)
     sw      k0, 0(s4)
     sw      k0, 4(s4)
     /* read back */
     lw      v1, 4(s4)
     srl     v1, v1, 16
+
+    /* Count the number of bits set in bits [23:16] of the read value */
     move    gp, zero
 kloop:
     andi    k0, v1, 1
     beqz    k0, no_passcount
-
-    /* OK */
+    /* Increment counter if the bit is still set */
     addiu   v0, v0, 1
 no_passcount:
     srl     v1, v1, 1
     addiu   gp, gp, 1
     slti    k0, gp, 8
-    bnez    k0, kloop
+    bnez    k0, kloop   /* while (gp < 8) */
 
     addiu   s8, s8, 1
     slti    k0, s8, 10
-    bnez    k0, jloop
+    bnez    k0, jloop   /* while (s8 < 10) */
+
+    /* v0 = 10 * 8 = 80 if all tests passed */
 
     lw      ra, 0x1C(sp)
     addiu   sp, sp, 0x28
@@ -1040,6 +1184,7 @@ END(TestCCValue)
  *  run with automatic setting.
  *
  *  a0 = manual CC value?
+ *  v0 = auto CC value
  */
 LEAF(ConvertManualToAuto)
     addiu   sp, sp, -0x28
@@ -1048,46 +1193,53 @@ LEAF(ConvertManualToAuto)
     sb      zero, 0x27(sp)
     move    t0, zero
     move    t2, zero
-    li      t5, 0xc800
+    li      t5, 64 * 800
     move    t6, zero
 big_loop:
     slti    k0, t6, 64
-    bnez    k0, coverloop
+    bnez    k0, coverloop   /* skip if (t6 < 64) */
     move    v0, zero
-    b       convert_done
+    b       convert_done    /* return 0 */
 coverloop:
     move    a0, t6
-    li      a1, 1
+    li      a1, CC_AUTO
     jal     WriteCC
-    /* Read CC (twice?) */
+
+    /* Read CC (twice? supposedly some NEC chips need to do this to ensure the read worked) */
     addiu   a0, sp, 0x27
     jal     ReadCC
     addiu   a0, sp, 0x27
     jal     ReadCC
     lbu     k0, 0x27(sp)
+
     /* Multiply by 800 */
     li      k1, 800
-    multu   k0, k1
-    mflo    t0
+    mul     t0, k0, k1
+
     lw      a0, 0x20(sp)
     subu    k0, t0, a0
     bgez    k0, pos
     subu    k0, a0, t0
 pos:
+    /* k0 = ABS(a0 - t0) */
+
     slt     k1, k0, t5
-    beqz    k1, compare_done
+    beqz    k1, compare_done    /* branch if k0 >= t5 */
     move    t5, k0
     move    t2, t6
 compare_done:
     lw      a0, 0x20(sp)
     slt     k1, t0, a0
-    beqz    k1, return_value
+    beqz    k1, return_value    /* break out of loop if t0 >= a0 */
+
     addiu   t6, t6, 1
     slti    k1, t6, 65
-    bnez    k1, big_loop
+    bnez    k1, big_loop        /* while (t6 < 65) */
+
 return_value:
     addu    v0, t2, t6
     srl     v0, v0, 1
+    /* return (t2 + t6) / 2 */
 convert_done:
     lw      ra, 0x1C(sp)
     addiu   sp, sp, 0x28
@@ -1097,7 +1249,7 @@ END(ConvertManualToAuto)
 /*
  * Write CC value and auto to RDRAM_MODE register
  *
- *  a0 = CC value ({ C5, C4, C3, C2, C1 })
+ *  a0 = CC value ({ C5, C4, C3, C2, C1, C0 })
  *  a1 = auto if 1, manual otherwise
  *  s5 = PHYS_TO_K1(RDRAM_MODE_REG)
  */
@@ -1106,37 +1258,37 @@ LEAF(WriteCC)
     andi    a0, a0, 0xff
     xori    a0, a0, 0x3f        /* There are 6 CC bits */
     sw      ra, 0x1C(sp)
-    li      t7, 0x46000000      /* X2, AS, DE */
-    li      k1, 1
+    li      t7, RDRAM_MODE_CC_MULT | RDRAM_MODE_CC_ENABLE | RDRAM_MODE_DEVICE_ENABLE
+    li      k1, CC_AUTO
     bne     a1, k1, non_auto
-    /* Auto, set CE bit */
-    li      k0, 0x80000000      /* CE */
+    /* Auto, set AS bit */
+    li      k0, RDRAM_MODE_AUTO_SKIP
     or      t7, t7, k0
 non_auto:
     /* Get the CC bits from a0 */
     andi    k0, a0, 1
     sll     k0, k0, 6
-    or      t7, t7, k0
+    or      t7, t7, k0  /* t7 |= (a0 & 0x01 <<  6) */
     andi    k0, a0, 2
     sll     k0, k0, 13
-    or      t7, t7, k0
+    or      t7, t7, k0  /* t7 |= (a0 & 0x02 << 13) */
     andi    k0, a0, 4
     sll     k0, k0, 20
-    or      t7, t7, k0
+    or      t7, t7, k0  /* t7 |= (a0 & 0x04 << 20) */
     andi    k0, a0, 8
     sll     k0, k0, 4
-    or      t7, t7, k0
+    or      t7, t7, k0  /* t7 |= (a0 & 0x08 <<  4) */
     andi    k0, a0, 16
     sll     k0, k0, 11
-    or      t7, t7, k0
+    or      t7, t7, k0  /* t7 |= (a0 & 0x10 << 11) */
     andi    k0, a0, 32
     sll     k0, k0, 18
-    or      t7, t7, k0
+    or      t7, t7, k0  /* t7 |= (a0 & 0x20 << 18) */
     /* Write new RDRAM_MODE value */
     sw      t7, (s5)
-    li      k1, 1
+    li      k1, CC_AUTO
     bne     a1, k1, write_done
-    /* If not auto, also write 0 to MI_INIT_MODE */
+    /* If auto, also write 0 to MI_INIT_MODE (clears init length?) */
     li      k0, PHYS_TO_K1(MI_INIT_MODE_REG)
     sw      zero, (k0)
 write_done:
@@ -1149,6 +1301,7 @@ END(WriteCC)
  * Read CC value from RDRAM_MODE register
  *
  *  a0 = where to store read value
+ *  s5 = PHYS_TO_K1(RDRAM_MODE_REG)
  */
 LEAF(ReadCC)
     addiu   sp, sp, -0x28
@@ -1166,27 +1319,27 @@ LEAF(ReadCC)
     and     k1, k1, s8
     srl     k1, k1, 6
     move    k0, zero
-    or      k0, k0, k1
+    or      k0, k0, k1  /* k0 |= (s8 & 0x000040 >>  6) */
     li      k1, 0x4000
     and     k1, k1, s8
     srl     k1, k1, 13
-    or      k0, k0, k1
+    or      k0, k0, k1  /* k0 |= (s8 & 0x004000 >> 13) */
     li      k1, 0x400000
     and     k1, k1, s8
     srl     k1, k1, 20
-    or      k0, k0, k1
+    or      k0, k0, k1  /* k0 |= (s8 & 0x400000 >> 20) */
     li      k1, 0x80
     and     k1, k1, s8
     srl     k1, k1, 4
-    or      k0, k0, k1
+    or      k0, k0, k1  /* k0 |= (s8 & 0x000080 >>  4) */
     li      k1, 0x8000
     and     k1, k1, s8
     srl     k1, k1, 11
-    or      k0, k0, k1
+    or      k0, k0, k1  /* k0 |= (s8 & 0x008000 >> 11) */
     li      k1, 0x800000
     and     k1, k1, s8
     srl     k1, k1, 18
-    or      k0, k0, k1
+    or      k0, k0, k1  /* k0 |= (s8 & 0x800000 >> 18) */
     /* Store CC value */
     sb      k0, (a0)
     lw      ra, 0x1C(sp)
