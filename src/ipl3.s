@@ -338,7 +338,11 @@ loop1_break:
     /* move all modules to their final address space, sorting 2MB modules before 1MB modules */
 
     /* broadcast global mode value and move all modules to address 0x2000000 */
+#ifdef IPL3_HW1
+    li      t0, RDRAM_MODE_CC_MULT | RDRAM_MODE_CC_ENABLE
+#else
     li      t0, RDRAM_MODE_CC_MULT | RDRAM_MODE_CC_ENABLE | RDRAM_MODE_AUTO_SKIP
+#endif
     sw      t0, (RDRAM_MODE_REG - RDRAM_BASE_REG)(t2)
     li      t0, 0x2000000 << 6
     sw      t0, (RDRAM_DEVICE_ID_REG - RDRAM_BASE_REG)(t2)
@@ -604,7 +608,7 @@ pifipl3e:
     li      t3, 0xFFF00000
     li      t1, 0x100000
     and     t2, t2, t3
-#ifdef IPL3_6101
+#if defined(IPL3_6101) || defined(IPL3_HW1)
     /* In the 6101 IPL3, these are physical addresses while in every other version they are KSEG1 addresses */
     la      t0, block17s-0xA0000000
     addiu   t1, t1, -1
@@ -689,7 +693,7 @@ waitdma:
     NOP
     NOP
 #endif
-#if defined(IPL3_6101) || defined(IPL3_6102_7101)
+#if defined(IPL3_HW1) || defined(IPL3_6101) || defined(IPL3_6102_7101)
     NOP
     NOP
     NOP
@@ -724,6 +728,15 @@ waitdma:
     lw      t3, PHYS_TO_K1(PI_STATUS_REG)
     andi    t3, PI_STATUS_DMA_BUSY
     bnez    t3, waitdma
+
+#ifdef IPL3_HW1
+
+    /* no checksum verification */
+.repeat 0x40
+    NOP
+.endr
+
+#else
 
 #ifdef IPL3_X105
     /* return the semaphore, notifies the RSP that PI DMA has completed */
@@ -834,11 +847,18 @@ checksum_loop:
 checksum_fail:
     bal     checksum_fail
 checksum_OK:
+#endif
+
+#endif /* IPL3_HW1 */
+
+#ifndef IPL3_X105
     /* Try to read PC, if the read worked the RSP is not running */
     lw      t1, PHYS_TO_K1(SP_PC_REG)
+#ifndef IPL3_HW1
     lw      s0, 0x14(sp)
     lw      ra, 0x1C(sp)
     addiu   sp, sp, 0x20
+#endif
     /* if the RSP PC is 0, skip */
     beqz    t1, 1f
     /* halt the RSP by forcing it into sstep mode? */
@@ -852,23 +872,43 @@ checksum_OK:
                 SP_CLR_SIG0 | SP_CLR_SIG1 | SP_CLR_SIG2 | SP_CLR_SIG3 | SP_CLR_SIG4 | SP_CLR_SIG5 | SP_CLR_SIG6 | SP_CLR_SIG7
     sw      t3, PHYS_TO_K1(SP_STATUS_REG)
 
+#ifndef IPL3_HW1
     li      t0, MI_INTR_MASK_CLR_SP | MI_INTR_MASK_CLR_SI | MI_INTR_MASK_CLR_AI | MI_INTR_MASK_CLR_VI | MI_INTR_MASK_CLR_PI | MI_INTR_MASK_CLR_DP; \
     sw      t0, PHYS_TO_K1(MI_INTR_MASK_REG)
+#else
+    li      t0, MI_INTR_MASK_CLR_SP | MI_INTR_MASK_CLR_SI | MI_INTR_MASK_CLR_AI | MI_INTR_MASK_CLR_VI | MI_INTR_MASK_CLR_PI | MI_INTR_MASK_CLR_DP
+    sw      t0, PHYS_TO_K1(MI_INTR_MASK_REG)
+#endif
 
     sw      zero, PHYS_TO_K1(SI_STATUS_REG)
 
     sw      zero, PHYS_TO_K1(AI_STATUS_REG)
 
+#ifndef IPL3_HW1
     li      t1, MI_CLR_DP_INTR; \
     sw      t1, PHYS_TO_K1(MI_INIT_MODE_REG)
+#else
+    li      t1, MI_CLR_DP_INTR
+    sw      t1, PHYS_TO_K1(MI_INIT_MODE_REG)
+#endif
 
     li      t1, PI_CLR_INTR
+#ifndef IPL3_HW1
     sw      t1, PHYS_TO_K1(PI_STATUS_REG); \
     li      t0, PHYS_TO_K1(0x00000300)
+#else
+    sw      t1, PHYS_TO_K1(PI_STATUS_REG)
+    li      t0, PHYS_TO_K1(0x00000300)
+#endif
 
 #if defined(IPL3_X103) || defined(IPL3_X105)
     li      t1, CIC_TYPE
     sw      t1, 0x10(t0)  /* osCicType */
+    sw      s4, 0(t0)   /* osTvType */
+    sw      s3, 4(t0)   /* osRomType */
+    sw      s5, 0xC(t0)  /* osResetType */
+    sw      s7, 0x14(t0)  /* osVersion */
+#elif defined(IPL3_HW1)
     sw      s4, 0(t0)   /* osTvType */
     sw      s3, 4(t0)   /* osRomType */
     sw      s5, 0xC(t0)  /* osResetType */
@@ -1029,8 +1069,10 @@ LEAF(InitCCValue)
 #ifdef IPL3_X105
 pifipl3e:
 #endif
+#ifndef IPL3_HW1
     move    s1, zero
     move    s0, zero
+#endif
     sw      v0, 0x00(sp)
     sw      v1, 0x04(sp)
     sw      a0, 0x08(sp)
@@ -1055,6 +1097,10 @@ pifipl3e:
     sw      s7, 0x5C(sp)
     sw      s8, 0x60(sp)
     sw      ra, 0x64(sp)
+#ifdef IPL3_HW1
+    move    s0, zero
+    move    s1, zero
+#endif
 
     /* Compute the CC value four times, sum for average */
 CCloop1:
@@ -1072,7 +1118,9 @@ CCloop1:
     /* Return the average CC value in v0 */
     srl     v0, s1, 2
 
+#ifndef IPL3_HW1
     lw      s1, 0x44(sp)
+#endif
     lw      v1, 0x04(sp)
     lw      a0, 0x08(sp)
     lw      a1, 0x0C(sp)
@@ -1089,6 +1137,9 @@ CCloop1:
     lw      t8, 0x38(sp)
     lw      t9, 0x3C(sp)
     lw      s0, 0x40(sp)
+#ifdef IPL3_HW1
+    lw      s1, 0x44(sp)
+#endif
     lw      s2, 0x48(sp)
     lw      s3, 0x4C(sp)
     lw      s4, 0x50(sp)
@@ -1210,10 +1261,15 @@ LEAF(ConvertManualToAuto)
     addiu   sp, sp, -0x28
     sw      ra, 0x1C(sp)
     sw      a0, 0x20(sp)
+#ifndef IPL3_HW1
     sb      zero, 0x27(sp)
+#endif
     move    t0, zero
     move    t2, zero
     li      t5, 64 * 800
+#ifdef IPL3_HW1
+    sb      zero, 0x27(sp)
+#endif
     move    t6, zero
 big_loop:
     slti    k0, t6, 64
@@ -1276,9 +1332,15 @@ END(ConvertManualToAuto)
 LEAF(WriteCC)
     addiu   sp, sp, -0x28
     andi    a0, a0, 0xff
+#ifdef IPL3_HW1
+    sw      ra, 0x1C(sp)
+    li      t7, RDRAM_MODE_CC_MULT | RDRAM_MODE_DEVICE_ENABLE
+    xori    a0, a0, 0x3f        /* There are 6 CC bits */
+#else
     xori    a0, a0, 0x3f        /* There are 6 CC bits */
     sw      ra, 0x1C(sp)
     li      t7, RDRAM_MODE_CC_MULT | RDRAM_MODE_AUTO_SKIP | RDRAM_MODE_DEVICE_ENABLE
+#endif
     li      k1, CC_AUTO
     bne     a1, k1, non_auto
     /* Auto, set CE bit */
@@ -1328,8 +1390,13 @@ LEAF(ReadCC)
     sw      ra, 0x1C(sp)
     li      k0, MI_SET_RDRAM
     li      k1, PHYS_TO_K1(MI_INIT_MODE_REG)
+#ifdef IPL3_HW1
+    move    s8, zero
+    sw      k0, (k1)
+#else
     sw      k0, (k1)
     move    s8, zero
+#endif
     /* Read RDRAM_MODE */
     lw      s8, (s5)
     li      k0, MI_CLR_RDRAM
@@ -1337,8 +1404,13 @@ LEAF(ReadCC)
     /* Extract CC bits */
     li      k1, 0x40
     and     k1, k1, s8
+#ifdef IPL3_HW1
+    move    k0, zero
+    srl     k1, k1, 6
+#else
     srl     k1, k1, 6
     move    k0, zero
+#endif
     or      k0, k0, k1  /* k0 |= (s8 & 0x000040 >>  6) */
     li      k1, 0x4000
     and     k1, k1, s8
@@ -1474,7 +1546,7 @@ END(ReadCC)
 .word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000
 .word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000
 #else
-#if defined(IPL3_6102_7101)
+#if defined(IPL3_6102_7101) || defined(IPL3_HW1)
 .word 0x00000000
 #elif defined(IPL3_7102)
 .word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000

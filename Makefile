@@ -5,7 +5,7 @@ COMPARE ?= 1
 # Cross-compiler toolchain prefix
 CROSS := mips-linux-gnu-
 
-TARGETS := pifrom.PAL pifrom.MPAL pifrom.NTSC ipl3.6101 ipl3.6102_7101 ipl3.7102 ipl3.X103 ipl3.X105 ipl3.X106
+TARGETS := pifrom.PAL pifrom.MPAL pifrom.NTSC ipl3.HW1 ipl3.6101 ipl3.6102_7101 ipl3.7102 ipl3.X103 ipl3.X105 ipl3.X106
 
 ifeq ($(ORIG_COMPILER),1)
     # Find qemu_irix, either path set in an env var, somewhere in PATH, or a binary in the tools/ dir
