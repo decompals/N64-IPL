@@ -2,6 +2,7 @@ __pycache__
 
 build
 
+tools/ido5.3_recomp
 tools/qemu-irix
 *.bin
 *.o

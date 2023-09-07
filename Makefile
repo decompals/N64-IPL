@@ -1,19 +1,24 @@
+# If ORIG_COMPILER is 1, compile with QEMU_IRIX and the original compiler binary instead of IDO recomp
+ORIG_COMPILER ?= 0
+# If COMPARE is 1, compare to original binary (if present in root dir) after building
+COMPARE ?= 1
+# Cross-compiler toolchain prefix
+CROSS := mips-linux-gnu-
 
 TARGETS := pifrom.PAL pifrom.MPAL pifrom.NTSC ipl3.6101 ipl3.6102_7101 ipl3.7102 ipl3.X103 ipl3.X105 ipl3.X106
-COMPARE ?= 1
 
-# Find qemu_irix, either path set in an env var, somewhere in PATH, or a binary in the tools/ dir
-QEMU_IRIX ?= $(shell which qemu-irix)
-ifeq (, $(QEMU_IRIX))
-  QEMU_IRIX := tools/qemu-irix
-  ifeq (, $(wildcard $(QEMU_IRIX)))
-	$(error Qemu-irix not found. Please either install qemu-irix package, set a QEMU_IRIX env var to the full path, or place the qemu-irix binary in the tools dir)
-  endif
+ifeq ($(ORIG_COMPILER),1)
+    # Find qemu_irix, either path set in an env var, somewhere in PATH, or a binary in the tools/ dir
+    ifndef QEMU_IRIX
+        QEMU_IRIX := $(shell which qemu-irix)
+        ifeq (, $(QEMU_IRIX))
+            $(error Please install qemu-irix package or set QEMU_IRIX env var to the full qemu-irix binary path)
+        endif
+    endif
+    CC := $(QEMU_IRIX) -L tools/ido5.3_compiler tools/ido5.3_compiler/usr/bin/cc
+else
+    CC := tools/ido5.3_recomp/cc
 endif
-
-CC = $(QEMU_IRIX) -L tools/ido5.3_compiler tools/ido5.3_compiler/usr/bin/cc
-
-CROSS := mips-linux-gnu-
 
 OBJCOPY := $(CROSS)objcopy
 OBJDUMP := $(CROSS)objdump
@@ -27,11 +32,17 @@ OPTFLAGS := -O2
 
 $(shell mkdir -p build)
 
-.PHONY: all clean $(TARGETS)
+.PHONY: all clean distclean setup $(TARGETS)
 all: $(BIN_FILES)
+
+setup:
+	$(MAKE) -C tools
 
 clean:
 	$(RM) -rf build
+
+distclean: clean
+	$(MAKE) -C tools distclean
 
 define MK_TARGET =
 $(1): build/$(1).bin
