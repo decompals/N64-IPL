@@ -48,10 +48,10 @@
 
 #define RI_CONFIG_CC_AUTO 0x40
 
-#define RDRAM_MODE_AUTO_SKIP        0x80000000 /*AS=1*/
-#define RDRAM_MODE_CC_MULT          0x40000000 /*X2=1*/
-#define RDRAM_MODE_CC_ENABLE        0x04000000 /*CE=1*/
 #define RDRAM_MODE_DEVICE_ENABLE    0x02000000 /*DE=1*/
+#define RDRAM_MODE_AUTO_SKIP        0x04000000 /*AS=1*/
+#define RDRAM_MODE_CC_MULT          0x40000000 /*X2=1*/
+#define RDRAM_MODE_CC_ENABLE        0x80000000 /*CE=1*/
 
 #define CC_AUTO   1
 #define CC_MANUAL 2
@@ -318,7 +318,7 @@ loop1_break:
     /* move all banks to their final address space, sorting 2MB banks before 1MB banks */
 
     /* broadcast global mode value and move all banks to address 0x2000000 */
-    li      t0, RDRAM_MODE_AUTO_SKIP | RDRAM_MODE_CC_MULT | RDRAM_MODE_CC_ENABLE
+    li      t0, RDRAM_MODE_CC_MULT | RDRAM_MODE_CC_ENABLE | RDRAM_MODE_AUTO_SKIP
     sw      t0, (RDRAM_MODE_REG - RDRAM_BASE_REG)(t2)
     li      t0, 0x2000000 << 6
     sw      t0, (RDRAM_DEVICE_ID_REG - RDRAM_BASE_REG)(t2)
@@ -1258,11 +1258,11 @@ LEAF(WriteCC)
     andi    a0, a0, 0xff
     xori    a0, a0, 0x3f        /* There are 6 CC bits */
     sw      ra, 0x1C(sp)
-    li      t7, RDRAM_MODE_CC_MULT | RDRAM_MODE_CC_ENABLE | RDRAM_MODE_DEVICE_ENABLE
+    li      t7, RDRAM_MODE_CC_MULT | RDRAM_MODE_AUTO_SKIP | RDRAM_MODE_DEVICE_ENABLE
     li      k1, CC_AUTO
     bne     a1, k1, non_auto
-    /* Auto, set AS bit */
-    li      k0, RDRAM_MODE_AUTO_SKIP
+    /* Auto, set CE bit */
+    li      k0, RDRAM_MODE_CC_ENABLE
     or      t7, t7, k0
 non_auto:
     /* Get the CC bits from a0 */
