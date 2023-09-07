@@ -338,7 +338,11 @@ loop1_break:
     /* move all modules to their final address space, sorting 2MB modules before 1MB modules */
 
     /* broadcast global mode value and move all modules to address 0x2000000 */
+#ifdef IPL3_GCC
+    li      t0, RDRAM_MODE_CC_MULT | RDRAM_MODE_CC_ENABLE
+#else
     li      t0, RDRAM_MODE_CC_MULT | RDRAM_MODE_CC_ENABLE | RDRAM_MODE_AUTO_SKIP
+#endif
     sw      t0, (RDRAM_MODE_REG - RDRAM_BASE_REG)(t2)
     li      t0, 0x2000000 << 6
     sw      t0, (RDRAM_DEVICE_ID_REG - RDRAM_BASE_REG)(t2)
@@ -600,21 +604,36 @@ pifipl3e:
     sw      t2, PHYS_TO_K1(SP_STATUS_REG)
 #endif
 
+#ifdef IPL3_GCC
+    la      t0, (block17s - K1BASE)
+    li      t1, 0x100000-1
+    and     t0, t0, t1
+#endif
     la      t2, PHYS_TO_K1(SP_DMEM_START)
     li      t3, 0xFFF00000
+#ifndef IPL3_GCC
     li      t1, 0x100000
+#endif
     and     t2, t2, t3
+#ifdef IPL3_GCC
+    or      t0, t0, t2
+    la      t3, (pifipl3e - K1BASE)
+#endif
 #ifdef IPL3_6101
     /* In the 6101 IPL3, these are physical addresses while in every other version they are KSEG1 addresses */
     la      t0, block17s-0xA0000000
     addiu   t1, t1, -1
     la      t3, pifipl3e-0xA0000000
 #else
+#ifndef IPL3_GCC
     la      t0, block17s
     addiu   t1, t1, -1
     la      t3, pifipl3e
 #endif
+#endif
+#ifndef IPL3_GCC
     and     t0, t0, t1
+#endif
     and     t3, t3, t1
 
 #ifdef IPL3_X105
@@ -622,7 +641,9 @@ pifipl3e:
     sw      zero, PHYS_TO_K1(SP_PC_REG)
 #endif
 
+#ifndef IPL3_GCC
     or      t0, t0, t2
+#endif
     or      t3, t3, t2
 #ifdef IPL3_X105
     la      t1, PHYS_TO_K1(4)
@@ -674,11 +695,17 @@ waitread:
     add     t0, t0, t3
     and     t0, t0, t2
     sw      t0, PHYS_TO_K1(PI_CART_ADDR_REG)
+#ifndef IPL3_GCC
     li      t2, 0x100000
+#else
+    li      t2, 0x100000-1
+#endif
 #ifdef IPL3_X103
     addiu   t2, t2, 3
 #else
+#ifndef IPL3_GCC
     addiu   t2, t2, -1
+#endif
 #endif
     sw      t2, PHYS_TO_K1(PI_WR_LEN_REG)
 
@@ -689,7 +716,7 @@ waitdma:
     NOP
     NOP
 #endif
-#if defined(IPL3_6101) || defined(IPL3_6102_7101)
+#if defined(IPL3_6101) || defined(IPL3_6102_7101) || defined(IPL3_GCC)
     NOP
     NOP
     NOP
@@ -724,6 +751,8 @@ waitdma:
     lw      t3, PHYS_TO_K1(PI_STATUS_REG)
     andi    t3, PI_STATUS_DMA_BUSY
     bnez    t3, waitdma
+
+#ifndef IPL3_GCC
 
 #ifdef IPL3_X105
     /* return the semaphore, notifies the RSP that PI DMA has completed */
@@ -823,7 +852,6 @@ checksum_loop:
 #ifndef IPL3_X105
 .set reorder
 #endif
-
 #ifndef IPL3_X105
     li      t3, PHYS_TO_K1(PI_DOM1_ADDR2)
     lw      t0, 0x10(t3)
@@ -833,12 +861,84 @@ checksum_loop:
     bal     checksum_OK
 checksum_fail:
     bal     checksum_fail
+#endif
+
+#else
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+#endif
+
+#ifndef IPL3_X105
 checksum_OK:
     /* Try to read PC, if the read worked the RSP is not running */
     lw      t1, PHYS_TO_K1(SP_PC_REG)
+#ifndef IPL3_GCC
     lw      s0, 0x14(sp)
     lw      ra, 0x1C(sp)
     addiu   sp, sp, 0x20
+#endif
     /* if the RSP PC is 0, skip */
     beqz    t1, 1f
     /* halt the RSP by forcing it into sstep mode? */
@@ -874,10 +974,17 @@ checksum_OK:
     sw      s5, 0xC(t0)  /* osResetType */
     sw      s7, 0x14(t0)  /* osVersion */
 #else
+#ifdef IPL3_GCC
+    sw      s4, 0(t0)   /* osTvType */
+    sw      s3, 4(t0)   /* osRomType */
+    sw      s5, 0xC(t0)  /* osResetType */
+    sw      s7, 0x14(t0)  /* osVersion */
+#else
     sw      s7, 0x14(t0)  /* osVersion */
     sw      s5, 0xC(t0)  /* osResetType */
     sw      s3, 4(t0)   /* osRomType */
     sw      s4, 0(t0)   /* osTvType */
+#endif
 #endif
 
     beqz    s3, rom
@@ -1024,13 +1131,17 @@ END(ipl3)
  */
 LEAF(InitCCValue)
     addiu   sp, sp, -0xA0
+#ifndef IPL3_GCC
     sw      s0, 0x40(sp)
     sw      s1, 0x44(sp)
+#endif
 #ifdef IPL3_X105
 pifipl3e:
 #endif
+#ifndef IPL3_GCC
     move    s1, zero
     move    s0, zero
+#endif
     sw      v0, 0x00(sp)
     sw      v1, 0x04(sp)
     sw      a0, 0x08(sp)
@@ -1047,6 +1158,10 @@ pifipl3e:
     sw      t7, 0x34(sp)
     sw      t8, 0x38(sp)
     sw      t9, 0x3C(sp)
+#ifdef IPL3_GCC
+    sw      s0, 0x40(sp)
+    sw      s1, 0x44(sp)
+#endif
     sw      s2, 0x48(sp)
     sw      s3, 0x4C(sp)
     sw      s4, 0x50(sp)
@@ -1055,12 +1170,20 @@ pifipl3e:
     sw      s7, 0x5C(sp)
     sw      s8, 0x60(sp)
     sw      ra, 0x64(sp)
-
+#ifdef IPL3_GCC
+    move    s0, zero
+    move    s1, zero
+#endif
     /* Compute the CC value four times, sum for average */
 CCloop1:
     jal     FindCC
+#ifdef IPL3_GCC
+    addiu   s0, s0, 1
+    addu    s1, s1, v0  /* s1 += cc */
+#else
     addu    s1, s1, v0  /* s1 += cc */
     addiu   s0, s0, 1
+#endif
     slti    t1, s0, 4
     bnez    t1, CCloop1 /* while (s0 < 4) */
 
@@ -1072,7 +1195,9 @@ CCloop1:
     /* Return the average CC value in v0 */
     srl     v0, s1, 2
 
+#ifndef IPL3_GCC
     lw      s1, 0x44(sp)
+#endif
     lw      v1, 0x04(sp)
     lw      a0, 0x08(sp)
     lw      a1, 0x0C(sp)
@@ -1089,6 +1214,9 @@ CCloop1:
     lw      t8, 0x38(sp)
     lw      t9, 0x3C(sp)
     lw      s0, 0x40(sp)
+#ifdef IPL3_GCC
+    lw      s1, 0x44(sp)
+#endif
     lw      s2, 0x48(sp)
     lw      s3, 0x4C(sp)
     lw      s4, 0x50(sp)
@@ -1132,7 +1260,15 @@ next_pass:
     slti    k0, t1, 80
     bnez    k0, prepass_loop    /* while (t1 < 80) */
 
+#ifndef IPL3_GCC
     mul     a0, t3, 22
+#else
+    sll     a0, t3, 2
+    subu    a0, a0, t3
+    sll     a0, a0, 2
+    subu    a0, a0, t3
+    sll     a0, a0, 1
+#endif
     addiu   a0, a0, -(22 * 40)
     /* a0 = (t3 - 40) * 22 */
     jal     ConvertManualToAuto
@@ -1210,10 +1346,15 @@ LEAF(ConvertManualToAuto)
     addiu   sp, sp, -0x28
     sw      ra, 0x1C(sp)
     sw      a0, 0x20(sp)
+#ifndef IPL3_GCC
     sb      zero, 0x27(sp)
+#endif
     move    t0, zero
     move    t2, zero
     li      t5, 64 * 800
+#ifdef IPL3_GCC
+    sb      zero, 0x27(sp)
+#endif
     move    t6, zero
 big_loop:
     slti    k0, t6, 64
@@ -1275,10 +1416,16 @@ END(ConvertManualToAuto)
  */
 LEAF(WriteCC)
     addiu   sp, sp, -0x28
+#ifdef IPL3_GCC
+    sw      ra, 0x1C(sp)
+    li      t7, RDRAM_MODE_CC_MULT | RDRAM_MODE_DEVICE_ENABLE
+#endif
     andi    a0, a0, 0xff
     xori    a0, a0, 0x3f        /* There are 6 CC bits */
+#ifndef IPL3_GCC
     sw      ra, 0x1C(sp)
     li      t7, RDRAM_MODE_CC_MULT | RDRAM_MODE_AUTO_SKIP | RDRAM_MODE_DEVICE_ENABLE
+#endif
     li      k1, CC_AUTO
     bne     a1, k1, non_auto
     /* Auto, set CE bit */
@@ -1326,19 +1473,29 @@ END(WriteCC)
 LEAF(ReadCC)
     addiu   sp, sp, -0x28
     sw      ra, 0x1C(sp)
+#ifdef IPL3_GCC
+    move    s8, zero
+#endif
     li      k0, MI_SET_RDRAM
     li      k1, PHYS_TO_K1(MI_INIT_MODE_REG)
     sw      k0, (k1)
+#ifndef IPL3_GCC
     move    s8, zero
+#endif
     /* Read RDRAM_MODE */
     lw      s8, (s5)
     li      k0, MI_CLR_RDRAM
     sw      k0, (k1)
     /* Extract CC bits */
+#ifdef IPL3_GCC
+    move    k0, zero
+#endif
     li      k1, 0x40
     and     k1, k1, s8
     srl     k1, k1, 6
+#ifndef IPL3_GCC
     move    k0, zero
+#endif
     or      k0, k0, k1  /* k0 |= (s8 & 0x000040 >>  6) */
     li      k1, 0x4000
     and     k1, k1, s8
@@ -1473,8 +1630,47 @@ END(ReadCC)
 .word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000
 .word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000
 .word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000
+#elif defined(IPL3_GCC)
+.word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000
+.word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x02001001, 0x400a0088, 0x04402202, 0x081041ff
+.word 0x08084044, 0x0120087f, 0x02041010, 0x80840420, 0x41fe0808, 0x40220110, 0x08804404, 0x3fc00700
+.word 0xc6080880, 0x24014002, 0x00100080, 0x02009004, 0x40418c03, 0x807e020c, 0x10108044, 0x02200900
+.word 0x48024012, 0x01100880, 0x84183f00, 0x7fe20010, 0x00800400, 0x2001ff08, 0x00400200, 0x10008004
+.word 0x003ff07f, 0xe2001000, 0x80040020, 0x01ff0800, 0x40020010, 0x00800400, 0x20000700, 0xc6080880
+.word 0x24014002, 0x00100083, 0xf2009004, 0x40618d03, 0x88401200, 0x90048024, 0x012009ff, 0xc8024012
+.word 0x00900480, 0x24012008, 0x07001000, 0x80040020, 0x01000800, 0x40020010, 0x00800400, 0x20038000
+.word 0x40020010, 0x00800400, 0x20010008, 0x00420210, 0x10808208, 0x0f804022, 0x02102082, 0x04202201
+.word 0x200a8062, 0x02081020, 0x80840220, 0x08400200, 0x10008004, 0x00200100, 0x08004002, 0x00100080
+.word 0x04003ff0, 0x800c0070, 0x07405a02, 0xc8264131, 0x11888c28, 0x61430418, 0x20c00440, 0x23011408
+.word 0xa0448222, 0x11108844, 0x42220910, 0x28814406, 0x20100f01, 0x86100880, 0x4801400a, 0x00500280
+.word 0x14009008, 0x80430c07, 0x807f8202, 0x10088044, 0x02201101, 0x0ff04002, 0x00100080, 0x04002000
+.word 0x0f018610, 0x08804801, 0x400a0050, 0x02801410, 0x90488143, 0x0c07907f, 0x82021008, 0x80440220
+.word 0x21fe0820, 0x40820410, 0x10808402, 0x20101f81, 0x02100880, 0x44001000, 0x70007000, 0x40011008
+.word 0x8042040f, 0xc07ff010, 0x00800400, 0x20010008, 0x00400200, 0x10008004, 0x00200100, 0x40220110
+.word 0x08804402, 0x20110088, 0x04402201, 0x08104081, 0x08078040, 0x12008808, 0x40420208, 0x20410110
+.word 0x08804401, 0x400a0020, 0x0100820c, 0x1060828a, 0x24512289, 0x14451428, 0xa1450a28, 0x20810408
+.word 0x20401101, 0x04102080, 0x88028008, 0x00400500, 0x44041020, 0x82022008, 0x40110108, 0x08208088
+.word 0x04401400, 0x40020010, 0x00800400, 0x2001007f, 0xe0010010, 0x01000800, 0x80080080, 0x08008004
+.word 0x00400400, 0x3ff00f80, 0x82080840, 0x42021010, 0x80840420, 0x21010808, 0x40410407, 0xc0020030
+.word 0x02800400, 0x20010008, 0x00400200, 0x10008004, 0x00200100, 0x0f008408, 0x10408004, 0x00200200
+.word 0x20020020, 0x02002002, 0x001fe00f, 0x00840810, 0x40800400, 0x401c0010, 0x00400208, 0x10408108
+.word 0x07800100, 0x1800c00a, 0x00900480, 0x44042021, 0x02081ff8, 0x02001000, 0x801f8100, 0x08004002
+.word 0x001780c2, 0x04080040, 0x02081040, 0x81080780, 0x0f008408, 0x10408200, 0x1000bc06, 0x10204102
+.word 0x08104081, 0x0807803f, 0xc0020020, 0x01001000, 0x80040040, 0x02001001, 0x00080040, 0x02000f00
+.word 0x84081040, 0x82040840, 0x3c021020, 0x41020810, 0x40810807, 0x800f0084, 0x08104082, 0x04102043
+.word 0x01e80040, 0x02081040, 0x81080780, 0x02001000, 0x80040020, 0x01000800, 0x40020010, 0x00000000
+.word 0x200100d8, 0x06c01201, 0x20000000, 0x00000000, 0x00000000, 0x00000000, 0x00000440, 0x22011008
+.word 0x87ff0440, 0x22011008, 0x83ff8440, 0x22011008, 0x80c00600, 0x10010000, 0x00000000, 0x00000000
+.word 0x00000000, 0x00000000, 0x00000000, 0x80444124, 0x05401c00, 0x40070054, 0x04904440, 0x20000000
+.word 0x00000080, 0x04002001, 0x00080ffe, 0x02001000, 0x80040020, 0x00000000, 0x00000000, 0x00000000
+.word 0x00000000, 0x00003001, 0x80040040, 0x00000000, 0x00000000, 0x00000000, 0x0ffe0000, 0x00000000
+.word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x30018000, 0x00000000, 0x00004004
+.word 0x00400400, 0x40040040, 0x04004004, 0x00400400, 0x40000000, 0x0000000c, 0x00600000, 0x00000000
+.word 0x00000180, 0x0c000000, 0x00000000, 0x00000000, 0x003ff800, 0x00000003, 0xff800000, 0x00000000
+.word 0x07004404, 0x10208004, 0x00400400, 0x40020010, 0x00000000, 0x20010007, 0x00c60808, 0x80243142
+.word 0x4a225122, 0x89223610, 0x02402186, 0x03c00000, 0x00000000, 0x00000000, 0x00000000, 0x00000000
 #else
-#if defined(IPL3_6102_7101)
+#if defined(IPL3_6102_7101) || defined(IPL3_GCC)
 .word 0x00000000
 #elif defined(IPL3_7102)
 .word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000

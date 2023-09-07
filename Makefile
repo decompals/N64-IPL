@@ -1,3 +1,5 @@
+MAKEFLAGS += --no-builtin-rules
+
 # If ORIG_COMPILER is 1, compile with QEMU_IRIX and the original compiler binary instead of IDO recomp
 ORIG_COMPILER ?= 0
 # If COMPARE is 1, compare to original binary (if present in root dir) after building
@@ -5,7 +7,10 @@ COMPARE ?= 1
 # Cross-compiler toolchain prefix
 CROSS := mips-linux-gnu-
 
-TARGETS := pifrom.PAL pifrom.MPAL pifrom.NTSC ipl3.6101 ipl3.6102_7101 ipl3.7102 ipl3.X103 ipl3.X105 ipl3.X106
+TARGETS := pifrom.PAL pifrom.MPAL pifrom.NTSC ipl3.6101 ipl3.6102_7101 ipl3.7102 ipl3.X103 ipl3.X105 ipl3.X106 ipl3.GCC
+
+# For EGCS
+export COMPILER_PATH := tools/egcs
 
 ifeq ($(ORIG_COMPILER),1)
     # Find qemu_irix, either path set in an env var, somewhere in PATH, or a binary in the tools/ dir
@@ -25,7 +30,7 @@ OBJDUMP := $(CROSS)objdump
 LD      := $(CROSS)ld
 STRIP   := $(CROSS)strip
 
-BIN_FILES  := $(foreach f,$(TARGETS),build/$f.bin)
+BIN_FILES := $(foreach f,$(TARGETS),build/$f.bin)
 
 ASFLAGS := -Wab,-r4300_mul -non_shared -G 0 -verbose -fullwarn -Xcpluscomm -nostdinc -I include -mips2 -o32
 OPTFLAGS := -O2
@@ -56,6 +61,10 @@ define SET_VARS =
 		DEFS := -DPIFROM_$(patsubst build/pifrom.%.bin,%,$(1))
 	else
 	ifneq ($(findstring ipl3,$(1)),)
+		ifneq ($(findstring GCC,$(1)),)
+			CC := $(COMPILER_PATH)/gcc -x assembler-with-cpp
+			ASFLAGS := -w -nostdinc -c -G 0 -D_LANGUAGE_ASSEMBLY -DIPL3_GCC -fno-PIC -mcpu=4300 -mips3 -mgp64 -mfp32 -I include
+		endif
 		SOURCES := src/ipl3.s
 		ADDRESS := 0xA4000040
 		DEFS := -DIPL3_$(patsubst build/ipl3.%.bin,%,$(1))
@@ -79,5 +88,7 @@ ifeq ($(COMPARE),1)
 	)
 endif
 endef
+
+$(info $(BIN_FILES))
 
 $(foreach p,$(BIN_FILES),$(eval $(call COMPILE,$(p))))

@@ -52,8 +52,6 @@
     /* Update on store conditional      */  SHIFTL( cu,  3, 1) | \
     /* KSEG0 cache coherency algorithm  */  SHIFTL( k0,  0, 3))
 
-ipl1_start:
-
 LEAF(ipl1)
     /* set initial values for C0_SR and C0_CONFIG */
 

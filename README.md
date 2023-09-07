@@ -32,3 +32,28 @@ IPL2 will read the ROM header and IPL3 from the cartridge into RSP DMEM, compute
 ## IPL3
 
 IPL3 has several versions with varying associated CICs, however the functionality is broadly the same. IPL3 initializes RDRAM and the caches before computing and verifying the ROM checksum. If the computed ROM checksum matches the ROM header, the ROM entrypoint function is entered.
+
+The iQue Player does not run IPL3 however the game images contain data in the IPL3 region. There are four cases:
+ - IPL3 6102 re-assembled with the GNU assembler
+ - IPL3 6102 unchanged
+ - IPL3 6102 'HW1' (see hw1 branch)
+ - Zero'd out except for the font
+
+Game                    | IPL3               | MD5
+------------------------|--------------------|---------------------------------
+Custom Robo             | ipl3.GCC           | 167a9149007575a1506a25c4efeae393
+Excitebike 64           | ipl3.GCC           | 167a9149007575a1506a25c4efeae393
+F-Zero X                | ipl3.GCC           | 167a9149007575a1506a25c4efeae393
+iQue Club               | ipl3.GCC           | 167a9149007575a1506a25c4efeae393
+Mario Kart 64           | ipl3.GCC           | 167a9149007575a1506a25c4efeae393
+Star Fox 64             | ipl3.GCC           | 167a9149007575a1506a25c4efeae393
+Super Mario 64          | ipl3.GCC           | 167a9149007575a1506a25c4efeae393
+Wave Race 64            | ipl3.GCC           | 167a9149007575a1506a25c4efeae393
+Yoshi's Story           | ipl3.GCC           | 167a9149007575a1506a25c4efeae393
+Animal Forest           | ipl3.6102          | e24dd796b2fa16511521139d28c8356b
+Dr Mario 64             | ipl3.6102          | e24dd796b2fa16511521139d28c8356b
+Zelda OoT (Simplified)  | ipl3.6102          | e24dd796b2fa16511521139d28c8356b
+Zelda OoT (Traditional) | ipl3.6102          | e24dd796b2fa16511521139d28c8356b
+Sin and Punishment      | ipl3.HW1           | 7a79074fcf69b174b3fb086fc33674aa
+Super Smash Bros        | ipl3.HW1           | 7a79074fcf69b174b3fb086fc33674aa
+Paper Mario             | all zeros bar font | dfe5790abcfba9e502a74ff0666771a4
