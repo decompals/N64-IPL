@@ -180,7 +180,7 @@ wait_rdram:
     li      t1, 0x2000000 << 6
     sw      t1, (RDRAM_DEVICE_ID_REG - RDRAM_BASE_REG)(t2)
 
-#define NumBanks            t5
+#define NumModules          t5
 #define InitialDeviceID     t6
 #define InitialRegBase      t7
 #define FinalDeviceID_1M    t8
@@ -189,10 +189,10 @@ wait_rdram:
 #define FinalDeviceID_2M    s7
 #define FinalRegBase_2M     a2
 #define TestAddr_2M         a3
-#define BankBitmask_2M      s2
+#define ModuleBitmask_2M    s2
 #define CCTestAddr          s4
 
-    move    NumBanks, zero
+    move    NumModules, zero
     move    InitialDeviceID, zero
     li      InitialRegBase, PHYS_TO_K1(RDRAM_BASE_REG)
     move    FinalDeviceID_1M, zero
@@ -201,7 +201,7 @@ wait_rdram:
     move    FinalDeviceID_2M, zero
     li      FinalRegBase_2M, PHYS_TO_K1(RDRAM_BASE_REG)
     li      TestAddr_2M, K1BASE
-    move    BankBitmask_2M, zero
+    move    ModuleBitmask_2M, zero
     li      CCTestAddr, K1BASE  /* Where in memory to do CC value testing */
 
     addiu   sp, sp, -0x48
@@ -222,26 +222,46 @@ rcp2:
     li      s0, 1 << 10    /* RCP 2.0 RDRAM regs spacing */
     ori     s1, t3, (0x2000000 >> 20) << 10
 
-    /* detect present RDRAM banks and compute the Current Control (CC) value for them */
+    /**
+     * Notes on RDRAM structure:
+     *
+     * RDRAMs are divided into:
+     *  Physical chip, which are split into some number of
+     *   Modules, which consist of
+     *    Banks, divided up into
+     *     Rows and Columns
+     *
+     * Modules are in one-to-one correspondence with the memory-mapped RDRAM registers.
+     *
+     * For RDRAM used by the N64:
+     * - only the 4MB chips are divided into multiple modules (2x 2MB). Otherwise they contain only one module
+     *    (either 2MB or 1MB)
+     * - banks are always 1MB large so 2MB modules contain 2 banks and 1MB modules contain a single bank.
+     * - rows are 0x800 / 2048 bytes large.
+     *
+     * Note that above we ignored the 9th bit per byte in each measurement.
+     */
+
+    /* detect present RDRAM modules and compute the Current Control (CC) value for them */
 loop1:
     /* set the first responder to the first available device ID */
     sw      InitialDeviceID, (RDRAM_DEVICE_ID_REG - RDRAM_BASE_REG)(s1)
 
-    /* try to find an appropriate CC value for this bank */
+    /* try to find an appropriate CC value for this module */
     addiu   s5, InitialRegBase, RDRAM_MODE_REG - RDRAM_BASE_REG
     jal     InitCCValue
      nop
-    /* failed, assume no bank */
+    /* failed, assume no module */
     beqz    v0, loop1_break
      nop
     /* save computed CC value for later */
     sw      v0, (sp)
 
-    /* determine bank size by reading the RDRAM device type register */
+    /* determine module size by reading the RDRAM device type register */
     li      t1, MI_SET_RDRAM
     sw      t1, (MI_INIT_MODE_REG - MI_BASE_REG)(t4)
     lw      t3, (RDRAM_DEVICE_TYPE_REG - RDRAM_BASE_REG)(InitialRegBase)
-    li      t0, 0xF0FF0000  /* Extracts 3x 4-bit values: Number of column/row/bank address bits */
+    li      t0, 0xF0FF0000  /* Extracts 3x 4-bit values: Number of column/row/bank address bits for this module */
     and     t3, t3, t0
     sw      t3, 4(sp) /* save device type for later */
     addi    sp, sp, 8
@@ -265,8 +285,8 @@ loop1:
     add     CCTestAddr, CCTestAddr, t0
 
     /* Only 2MB modules are flagged? */
-    sll     BankBitmask_2M, BankBitmask_2M, 1
-    addi    BankBitmask_2M, BankBitmask_2M, 1
+    sll     ModuleBitmask_2M, ModuleBitmask_2M, 1
+    addi    ModuleBitmask_2M, ModuleBitmask_2M, 1
     b       LM
      nop
 SM:
@@ -308,16 +328,16 @@ done_manufacture:
     add     InitialRegBase, InitialRegBase, s0
     add     InitialRegBase, InitialRegBase, s0
 
-    addiu   NumBanks, NumBanks, 1
-    /* Only try up to 8 banks */
-    sltiu   t0, NumBanks, 8
+    addiu   NumModules, NumModules, 1
+    /* Only try up to 8 modules (either 1M or 2M for possible maximum of 16MB installed memory?) */
+    sltiu   t0, NumModules, 8
     bnez    t0, loop1
      nop
 loop1_break:
 
-    /* move all banks to their final address space, sorting 2MB banks before 1MB banks */
+    /* move all modules to their final address space, sorting 2MB modules before 1MB modules */
 
-    /* broadcast global mode value and move all banks to address 0x2000000 */
+    /* broadcast global mode value and move all modules to address 0x2000000 */
     li      t0, RDRAM_MODE_CC_MULT | RDRAM_MODE_CC_ENABLE | RDRAM_MODE_AUTO_SKIP
     sw      t0, (RDRAM_MODE_REG - RDRAM_BASE_REG)(t2)
     li      t0, 0x2000000 << 6
@@ -412,17 +432,17 @@ HM:
     li      t0, 0x200000    /* 2MB */
     add     TestAddr_2M, TestAddr_2M, t0
 loop2_next:
-    /* Loop until all detected banks are configured */
+    /* Loop until all detected modules are configured */
     addiu   v1, v1, 1
-    slt     t0, v1, NumBanks
+    slt     t0, v1, NumModules
     bnez    t0, loop2
      nop
 
     /* Set RI_REFRESH */
     li      t2, PHYS_TO_K1(RI_BASE_REG)
-    sll     BankBitmask_2M, BankBitmask_2M, 19
+    sll     ModuleBitmask_2M, ModuleBitmask_2M, 19
     li      t1, RI_REFRESH(0, 1, 1, 0, 54, 52)
-    or      t1, t1, BankBitmask_2M                  /* detected 2MB banks */
+    or      t1, t1, ModuleBitmask_2M                /* detected 2MB modules */
     sw      t1, (RI_REFRESH_REG - RI_BASE_REG)(t2)
     lw      t1, (RI_REFRESH_REG - RI_BASE_REG)(t2)  /* dummy read? */
 
