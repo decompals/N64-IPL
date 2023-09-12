@@ -1,5 +1,5 @@
 
-IDO_TARNAME := ido-5.3-recomp-ubuntu-20.04.tar.gz
+IDO_TARNAME := ido-5.3-recomp-linux.tar.gz
 IDO_URL := https://github.com/decompals/ido-static-recomp/releases/latest/download/$(IDO_TARNAME)
 
 # IDO
