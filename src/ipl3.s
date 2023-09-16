@@ -25,6 +25,21 @@
     (((RowImpRestore) & 0x1F) <<  8) | \
     (((RowExpRestore) & 0x1F) <<  0))
 
+/*
+ * http://pdf.datasheetcatalog.com/datasheet/oki/MSM5718B70.pdf     pg20
+ *
+ * This doesn't agree with the datasheet.. reads of this register do agree
+ * but the write doesn't?
+ *
+ * TODO investigate further, for now just order the shifts (8, 0, 24, 16)
+ * instead of (24, 16, 8, 0)
+ */
+#define RDRAM_DELAY(AckWinDelay, ReadDelay, AckDelay, WriteDelay) \
+   ((((AckWinDelay) & 7) << 3 <<  8) | \
+    (((ReadDelay)   & 7) << 3 <<  0) | \
+    (((AckDelay)    & 3) << 3 << 24) | \
+    (((WriteDelay)  & 7) << 3 << 16))
+
 #define DEVICE_TYPE(Bank, Row, Col, Bonus, EnhancedSpeed, Version, Type) \
    ((((Col)           & 0xF) << 28) | \
     (((Bonus)         &   1) << 26) | \
@@ -169,8 +184,8 @@ wait_rdram:
      ori    t1, zero, MI_SET_INIT | 15
     sw      t1, (MI_INIT_MODE_REG - MI_BASE_REG)(t4)
 
-    /* Set all Delays | AckWin=11 , Read=9 , Ack=3 , Write=7 ? */
-    li      t1, 0x18082838
+    /* Set all Delays: AckWin=5, Read=7, Ack=3, Write=1 */
+    li      t1, RDRAM_DELAY(5, 7, 3, 1)
     sw      t1, (RDRAM_DELAY_REG - RDRAM_BASE_REG)(t2)
 
     /* Set all Refresh Row to 0 */
