@@ -27,18 +27,14 @@
 
 /*
  * http://pdf.datasheetcatalog.com/datasheet/oki/MSM5718B70.pdf     pg20
- *
- * This doesn't agree with the datasheet.. reads of this register do agree
- * but the write doesn't?
- *
- * TODO investigate further, for now just order the shifts (8, 0, 24, 16)
- * instead of (24, 16, 8, 0)
  */
 #define RDRAM_DELAY(AckWinDelay, ReadDelay, AckDelay, WriteDelay) \
-   ((((AckWinDelay) & 7) << 3 <<  8) | \
-    (((ReadDelay)   & 7) << 3 <<  0) | \
-    (((AckDelay)    & 3) << 3 << 24) | \
-    (((WriteDelay)  & 7) << 3 << 16))
+   ((((AckWinDelay) & 7) << 3 << 24) | \
+    (((ReadDelay)   & 7) << 3 << 16) | \
+    (((AckDelay)    & 3) << 3 <<  8) | \
+    (((WriteDelay)  & 7) << 3 <<  0))
+
+#define ROT16(x) ((((x) & 0xFFFF0000) >> 16) | (((x) & 0xFFFF) << 16))
 
 #define DEVICE_TYPE(Bank, Row, Col, Bonus, EnhancedSpeed, Version, Type) \
    ((((Col)           & 0xF) << 28) | \
@@ -180,12 +176,23 @@ wait_rdram:
     bnez    s1, wait_rdram
 #endif /* !IPL3_6101 */
 
-    /* set MI init mode, length 15 */
+    /* 
+     * Set MI init mode, length 15. This equentially repeats the next written value on the bus for 16 bytes total.
+     * e.g. for a word write 0xAABBCCDD the write data is extended to 0xAABBCCDDAABBCCDDAABBCCDDAABBCCDD
+     *
+     * This is required as the RDRAM delays have yet to be configured, so RDRAM transactions (including register
+     * read/write) do not behave correctly. For timings to work out when writing the delay register the value must be
+     * rotated by 16 bits and repeated for the delay register to be set to the correct value under the default delay
+     * configuration.
+     *
+     * https://n64brew.dev/wiki/RDRAM#Reset_Complications
+     */
      ori    t1, zero, MI_SET_INIT | 15
     sw      t1, (MI_INIT_MODE_REG - MI_BASE_REG)(t4)
 
     /* Set all Delays: AckWin=5, Read=7, Ack=3, Write=1 */
-    li      t1, RDRAM_DELAY(5, 7, 3, 1)
+    /* This must be the next bus write following setting MI Init mode for the reason explained above */
+    li      t1, ROT16(RDRAM_DELAY(5, 7, 3, 1))
     sw      t1, (RDRAM_DELAY_REG - RDRAM_BASE_REG)(t2)
 
     /* Set all Refresh Row to 0 */
@@ -880,7 +887,6 @@ checksum_OK:
     li      t1, PI_CLR_INTR
     sw      t1, PHYS_TO_K1(PI_STATUS_REG); \
     li      t0, PHYS_TO_K1(0x00000300)
-
 #if defined(IPL3_X103) || defined(IPL3_X105)
     li      t1, CIC_TYPE
     sw      t1, 0x10(t0)  /* osCicType */

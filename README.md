@@ -12,7 +12,7 @@ Run `make` to build all binaries. To test matching, provide a binary file for th
  - `pifrom.ntsc.bin`
  - `pifrom.pal.bin`
  - `pifrom.mpal.bin`
- - `ipl3.6106.bin`
+ - `ipl3.6101.bin`
  - `ipl3.6102_7101.bin`
  - `ipl3.7102.bin`
  - `ipl3.X103.bin`
